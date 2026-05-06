@@ -120,6 +120,16 @@
             <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="12dp" android:text="Fetching video details..." android:textColor="@color/text_secondary" android:textSize="15sp" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/updateEngineButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_secondary_button"
+            android:text="Update downloader engine"
+            android:textAllCaps="false"
+            android:textColor="@color/text_primary" />
+
         <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:textColor="@color/danger" android:textSize="14sp" android:visibility="gone" />
 
         <LinearLayout android:id="@+id/detailCard" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:background="@drawable/bg_card" android:orientation="vertical" android:padding="16dp" android:visibility="gone">

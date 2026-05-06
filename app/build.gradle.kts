@@ -21,6 +21,9 @@ kotlin {
 }
 
 dependencies {
+    implementation("io.github.junkfood02.youtubedl-android:library:0.18.0")
+    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.0")
+    implementation("io.github.junkfood02.youtubedl-android:aria2c:0.18.0")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

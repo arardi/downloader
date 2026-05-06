@@ -6,5 +6,6 @@ data class DownloadFormat(
     val extension: String,
     val quality: String?,
     val fileSizeBytes: Long?,
-    val directUrl: String?
+    val directUrl: String?,
+    val ytdlpFormat: String? = null
 )

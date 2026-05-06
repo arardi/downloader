@@ -1,6 +1,5 @@
 package eu.linkzhe.shortdownloader.storage
 
-import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
 import android.media.MediaScannerConnection
@@ -38,6 +37,23 @@ class MediaStoreSaver(private val context: Context) {
         val uri = resolver.insert(collection, values) ?: error("Cannot create MediaStore entry.")
         val stream = resolver.openOutputStream(uri) ?: error("Cannot open MediaStore output stream.")
         return PendingVideo(uri, stream, values.getAsString(MediaStore.Video.Media.DATA))
+    }
+
+
+    fun saveVideoFile(source: File, displayName: String, mimeType: String = "video/mp4"): Uri {
+        val pending = createVideo(displayName, mimeType)
+        try {
+            pending.stream.use { output ->
+                source.inputStream().use { input ->
+                    input.copyTo(output)
+                }
+            }
+            publish(pending.uri, pending.legacyPath)
+            return pending.uri
+        } catch (throwable: Throwable) {
+            delete(pending.uri)
+            throw throwable
+        }
     }
 
     fun publish(uri: Uri, legacyPath: String?) {

@@ -1,6 +1,7 @@
 package eu.linkzhe.shortdownloader.model
 
 data class VideoInfo(
+    val originalUrl: String,
     val videoId: String,
     val title: String,
     val channel: String?,

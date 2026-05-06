@@ -1,7 +1,6 @@
 package eu.linkzhe.shortdownloader
 
 import android.Manifest
-import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -17,6 +16,10 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import com.yausername.youtubedl_android.FFmpeg
+import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel
+import com.yausername.youtubedl_android.YoutubeDL
+import com.yausername.youtubedl_android.YoutubeDLException
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -68,6 +71,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         downloadManager = DownloadManager(applicationContext)
         bindViews()
         bindActions()
+        initDownloaderEngine()
     }
 
     private fun bindViews() {
@@ -95,7 +99,37 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         findViewById<Button>(R.id.clearButton).setOnClickListener { clearInput() }
         findViewById<Button>(R.id.analyzeButton).setOnClickListener { analyzeUrl() }
         findViewById<Button>(R.id.refreshButton).setOnClickListener { analyzeUrl() }
+        findViewById<Button>(R.id.updateEngineButton).setOnClickListener { updateDownloaderEngine() }
         openFileButton.setOnClickListener { openCompletedFile() }
+    }
+
+
+    private fun initDownloaderEngine() {
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    YoutubeDL.getInstance().init(this@MainActivity)
+                    FFmpeg.getInstance().init(this@MainActivity)
+                }
+            }
+            result.onFailure { throwable ->
+                val message = (throwable as? YoutubeDLException)?.message ?: throwable.message
+                showError("Downloader engine failed to initialize: ${message.orEmpty()}")
+            }
+        }
+    }
+
+    private fun updateDownloaderEngine() {
+        loadingContainer.visibility = View.VISIBLE
+        showInfo("Updating downloader engine...")
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { YoutubeDL.getInstance().updateYoutubeDL(this@MainActivity, UpdateChannel.STABLE) }
+            }
+            loadingContainer.visibility = View.GONE
+            result.onSuccess { showInfo("Downloader engine updated") }
+                .onFailure { showError("Downloader engine update failed: ${it.message.orEmpty()}") }
+        }
     }
 
     private fun pasteFromClipboard() {
@@ -125,7 +159,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             val result = runCatching { extractor.fetchInfo(input) }
             loadingContainer.visibility = View.GONE
             result.onSuccess { renderVideoInfo(it) }
-                .onFailure { showError(getString(R.string.unable_extract)) }
+                .onFailure { showError("Unable to extract video details. The video may be unavailable, private, restricted, or the downloader engine needs an update.") }
         }
     }
 
@@ -145,7 +179,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         formatsContainer.removeAllViews()
         if (videoInfo.formats.isEmpty()) {
             val empty = TextView(this).apply {
-                text = "No downloadable format found. Metadata fallback is available, but this build does not bypass YouTube protections or use cookies."
+                text = "No downloadable format found."
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
                 textSize = 14f
                 setPadding(0, 14, 0, 0)
@@ -162,7 +196,11 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 format.extension.uppercase(),
                 TimeFormat.bytes(format.fileSizeBytes)
             ).joinToString(" • ")
-            item.findViewById<Button>(R.id.downloadButton).setOnClickListener { startDownload(format, videoInfo) }
+            val downloadButton = item.findViewById<Button>(R.id.downloadButton)
+            val downloadable = format.directUrl != null || format.ytdlpFormat != null
+            downloadButton.isEnabled = downloadable
+            downloadButton.alpha = if (downloadable) 1f else 0.5f
+            downloadButton.setOnClickListener { startDownload(format, videoInfo) }
             formatsContainer.addView(item)
         }
     }
@@ -244,8 +282,15 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         }
     }
 
+    private fun showInfo(message: String) {
+        statusText.text = message
+        statusText.setTextColor(ContextCompat.getColor(this, R.color.success))
+        statusText.visibility = View.VISIBLE
+    }
+
     private fun showError(message: String) {
         statusText.text = message
+        statusText.setTextColor(ContextCompat.getColor(this, R.color.danger))
         statusText.visibility = View.VISIBLE
     }
 
