@@ -5,7 +5,6 @@ import android.os.Environment
 import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.WorkerParameters
-import com.yausername.youtubedl_android.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -57,7 +56,6 @@ class DownloadWorker(
     private fun ensureDownloaderInitialized() {
         try {
             YoutubeDL.getInstance().init(applicationContext)
-            FFmpeg.getInstance().init(applicationContext)
         } catch (exception: YoutubeDLException) {
             throw IllegalStateException("Downloader engine failed to initialize: ${exception.message}", exception)
         }

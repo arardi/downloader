@@ -16,7 +16,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
-import com.yausername.youtubedl_android.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
@@ -106,10 +105,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private fun initDownloaderEngine() {
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
+            val result: Result<Unit> = withContext(Dispatchers.IO) {
+                runCatching<Unit> {
                     YoutubeDL.getInstance().init(this@MainActivity)
-                    FFmpeg.getInstance().init(this@MainActivity)
                 }
             }
             result.onFailure { throwable ->
