@@ -166,7 +166,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             return
         }
 
-        videoInfo.formats.forEach { format ->
+        mp4Formats.forEach { format ->
             val item = LayoutInflater.from(this).inflate(R.layout.item_format, formatsContainer, false)
             item.findViewById<TextView>(R.id.qualityBadge).text = format.qualityBadge()
             item.findViewById<TextView>(R.id.formatLabel).text = format.label
