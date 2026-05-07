@@ -27,6 +27,7 @@ import eu.linkzhe.shortdownloader.download.DownloadWorker
 import eu.linkzhe.shortdownloader.extractor.VideoExtractor
 import eu.linkzhe.shortdownloader.extractor.YtdownApiExtractor
 import eu.linkzhe.shortdownloader.model.DownloadFormat
+import eu.linkzhe.shortdownloader.model.PreparedDownload
 import eu.linkzhe.shortdownloader.model.VideoInfo
 import eu.linkzhe.shortdownloader.util.TimeFormat
 import eu.linkzhe.shortdownloader.util.UrlParser
@@ -65,6 +66,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private val formatButtons = mutableListOf<Button>()
     private var currentVideoInfo: VideoInfo? = null
     private var completedUri: Uri? = null
+    private var activeFormat: DownloadFormat? = null
+    private var activeFormatAutoReprepared = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,7 +104,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         findViewById<Button>(R.id.clearButton).setOnClickListener { clearInput() }
         findViewById<Button>(R.id.analyzeButton).setOnClickListener { analyzeUrl() }
         findViewById<Button>(R.id.refreshButton).setOnClickListener { analyzeUrl() }
-        openFileButton.setOnClickListener { openCompletedFile() }
+        openFileButton.setOnClickListener {
+            if (completedUri != null) {
+                openCompletedFile()
+            } else {
+                activeFormat?.let { startDownload(it) }
+            }
+        }
     }
 
     private fun pasteFromClipboard() {
@@ -116,6 +125,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         detailCard.visibility = View.GONE
         formatSection.visibility = View.GONE
         downloadCard.visibility = View.GONE
+        completedUri = null
+        activeFormat = null
+        activeFormatAutoReprepared = false
         formatButtons.clear()
     }
 
@@ -142,10 +154,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         currentVideoInfo = videoInfo
         detailCard.visibility = View.VISIBLE
         titleText.text = videoInfo.title
-        channelText.text = "Channel: ${videoInfo.channel ?: "Unknown"} ${videoInfo.username.orEmpty()}".trim()
-        durationText.text = videoInfo.durationText?.let { "Duration: $it" } ?: TimeFormat.duration(videoInfo.durationSeconds)
-        viewsText.text = videoInfo.viewsText?.let { "Views: $it" } ?: "Views: Unknown"
-        videoIdText.text = "Video ID: ${videoInfo.videoId}"
+        channelText.text = listOfNotNull(videoInfo.channel ?: "Unknown channel", videoInfo.username?.let { "@$it" }).joinToString(" • ")
+        durationText.text = videoInfo.durationText ?: TimeFormat.duration(videoInfo.durationSeconds)
+        viewsText.text = videoInfo.viewsText ?: "Views unknown"
+        videoIdText.text = videoInfo.videoId.take(6)
         showInfo("API status: ${videoInfo.apiStatus ?: "ok"}")
         loadThumbnail(videoInfo.thumbnailUrl)
         renderFormats(videoInfo)
@@ -178,15 +190,15 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             val item = LayoutInflater.from(this).inflate(R.layout.item_format, formatsContainer, false)
 
             item.findViewById<TextView>(R.id.qualityBadge).text = format.qualityBadge()
-            item.findViewById<TextView>(R.id.formatLabel).text = format.label
+            item.findViewById<TextView>(R.id.formatLabel).text = format.displayTitle()
             item.findViewById<TextView>(R.id.formatMeta).text = listOfNotNull(
-                format.resolution,
                 format.extension.uppercase(),
                 format.fileSizeText
             ).joinToString(" • ")
-
-            item.findViewById<TextView>(R.id.taskBadge).visibility =
-                if (format.mediaTask.equals("merge", ignoreCase = true)) View.VISIBLE else View.GONE
+            item.findViewById<TextView>(R.id.taskBadge).apply {
+                text = "Prepared by API"
+                visibility = View.VISIBLE
+            }
 
             val downloadButton = item.findViewById<Button>(R.id.downloadButton)
             downloadButton.isEnabled = true
@@ -205,36 +217,64 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             return
         }
 
+        activeFormat = format
+        activeFormatAutoReprepared = false
+        prepareAndStartDownload(format)
+    }
+
+    private fun prepareAndStartDownload(format: DownloadFormat) {
         setFormatButtonsEnabled(false)
+        completedUri = null
         downloadCard.visibility = View.VISIBLE
         openFileButton.visibility = View.GONE
-        downloadProgress.progress = 0
-        downloadFileText.text = format.label
-        downloadStatusText.text = "Preparing ${format.qualityBadge()}..."
-        downloadSizeText.text = format.fileSizeText?.let { "Estimated size: $it" }.orEmpty()
-        downloadPercentText.text = "0%"
+        downloadProgress.isIndeterminate = true
+        downloadProgress.progress = 5
+        downloadFileText.text = "Preparing ${format.qualityBadge()}..."
+        downloadStatusText.text = "Waiting for final file URL..."
+        downloadSizeText.text = format.fileSizeText?.let { "Estimated size: $it" } ?: "Preparing selected quality"
+        downloadPercentText.text = "5%"
         showInfo("Preparing selected quality...")
 
         lifecycleScope.launch {
-            val preparedResult = runCatching { extractor.prepareDownload(format) }
-            preparedResult.onSuccess { prepared ->
-                showInfo("Final URL ready. Downloading...")
-                downloadStatusText.text = "Downloading..."
-                downloadFileText.text = prepared.fileName
-                downloadSizeText.text = prepared.fileSizeText?.let { "File size: $it" }.orEmpty()
-                val request = runCatching { downloadManager.download(prepared) }
-                    .getOrElse {
-                        setFormatButtonsEnabled(true)
-                        showError(it.message ?: getString(R.string.no_downloadable_format))
-                        return@launch
+            val preparedResult = runCatching {
+                extractor.prepareDownload(format) { message ->
+                    runOnUiThread {
+                        downloadStatusText.text = message
+                        statusText.text = message
                     }
-                observeDownload(request.id)
+                }
+            }
+            preparedResult.onSuccess { prepared ->
+                beginPreparedDownload(prepared)
             }.onFailure {
                 setFormatButtonsEnabled(true)
+                downloadProgress.isIndeterminate = false
                 downloadStatusText.text = "Preparation failed"
-                showError("Could not prepare this quality. Try another quality or analyze again.")
+                downloadFileText.text = "Download failed"
+                downloadSizeText.text = it.message ?: "File is still being prepared. Please try again."
+                openFileButton.text = "Retry"
+                openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_retry, 0, 0, 0)
+                openFileButton.visibility = View.VISIBLE
+                showError("Could not prepare this quality. ${it.message.orEmpty()}".trim())
             }
         }
+    }
+
+    private fun beginPreparedDownload(prepared: PreparedDownload) {
+        showInfo("Final URL ready. Downloading...")
+        downloadProgress.isIndeterminate = false
+        downloadProgress.progress = 0
+        downloadStatusText.text = "Downloading..."
+        downloadFileText.text = prepared.fileName
+        downloadSizeText.text = prepared.fileSizeText?.let { "File size: $it" } ?: "Saving to Movies/ZaShortsDownloader"
+        downloadPercentText.text = "0%"
+        val request = runCatching { downloadManager.download(prepared) }
+            .getOrElse {
+                setFormatButtonsEnabled(true)
+                showError(it.message ?: getString(R.string.no_downloadable_format))
+                return
+            }
+        observeDownload(request.id)
     }
 
     private fun observeDownload(id: java.util.UUID) {
@@ -253,18 +293,36 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val error = info.outputData.getString(DownloadWorker.KEY_ERROR)
         val outputUri = info.outputData.getString(DownloadWorker.KEY_OUTPUT_URI) ?: data.getString(DownloadWorker.KEY_OUTPUT_URI)
 
+        downloadProgress.isIndeterminate = false
         downloadProgress.progress = progress
         downloadFileText.text = fileName.ifBlank { "Download" }
-        downloadStatusText.text = error ?: status
-        downloadPercentText.text = if (speed > 0) "$progress% • ${TimeFormat.bytes(speed)}/s" else "$progress%"
+        downloadStatusText.text = if (speed > 0 && info.state == WorkInfo.State.RUNNING) {
+            "$status • ${TimeFormat.bytes(speed)}/s"
+        } else {
+            error ?: status
+        }
+        downloadPercentText.text = "$progress%"
 
         if (info.state == WorkInfo.State.SUCCEEDED && !outputUri.isNullOrBlank()) {
             completedUri = Uri.parse(outputUri)
-            downloadStatusText.text = "Completed"
+            downloadFileText.text = "Download completed"
+            downloadStatusText.text = "Saved to Movies/ZaShortsDownloader"
+            downloadSizeText.text = fileName
+            openFileButton.text = "Open file"
+            openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_open, 0, 0, 0)
             openFileButton.visibility = View.VISIBLE
             setFormatButtonsEnabled(true)
         } else if (info.state == WorkInfo.State.FAILED) {
-            downloadStatusText.text = error ?: "Download failed"
+            val message = error ?: "Download failed"
+            if (shouldAutoReprepare(message)) {
+                retryExpiredFinalUrl()
+                return
+            }
+            downloadFileText.text = "Download failed"
+            downloadStatusText.text = message
+            openFileButton.text = "Retry"
+            openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_retry, 0, 0, 0)
+            openFileButton.visibility = View.VISIBLE
             setFormatButtonsEnabled(true)
         }
     }
@@ -276,10 +334,38 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         }
     }
 
+    private fun shouldAutoReprepare(message: String): Boolean {
+        val lower = message.lowercase()
+        return !activeFormatAutoReprepared && activeFormat != null &&
+            listOf("expired", "not ready", "403", "404", "410").any { it in lower }
+    }
+
+    private fun retryExpiredFinalUrl() {
+        val format = activeFormat ?: return
+        activeFormatAutoReprepared = true
+        downloadProgress.isIndeterminate = true
+        downloadFileText.text = "Preparing again..."
+        downloadStatusText.text = "Final URL expired. Preparing again..."
+        downloadSizeText.text = "Refreshing the final file URL once"
+        showInfo("Final URL expired. Preparing again...")
+        prepareAndStartDownload(format)
+    }
+
     private fun DownloadFormat.qualityBadge(): String = resolution?.let { Regex("\\d+").find(it)?.value }
         ?.let { "${it}p" }
         ?: quality
         ?: "MP4"
+
+    private fun DownloadFormat.displayTitle(): String {
+        val height = resolution?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
+        val tier = when {
+            height == null -> quality ?: "MP4"
+            height >= 1080 -> "FHD"
+            height >= 720 -> "HD"
+            else -> "SD"
+        }
+        return listOfNotNull(tier, resolution).joinToString(" • ")
+    }
 
     private fun openCompletedFile() {
         val uri = completedUri ?: return
@@ -312,12 +398,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private fun showInfo(message: String) {
         statusText.text = message
         statusText.setTextColor(ContextCompat.getColor(this, R.color.success))
+        statusText.setBackgroundResource(R.drawable.bg_status_success)
         statusText.visibility = View.VISIBLE
     }
 
     private fun showError(message: String) {
         statusText.text = message
         statusText.setTextColor(ContextCompat.getColor(this, R.color.danger))
+        statusText.setBackgroundResource(R.drawable.bg_status_error)
         statusText.visibility = View.VISIBLE
     }
 

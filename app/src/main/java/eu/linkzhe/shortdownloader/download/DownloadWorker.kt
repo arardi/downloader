@@ -9,16 +9,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-// Keep File and UUID imports above for the final-file download temp file.
 class DownloadWorker(
     appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
     private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
@@ -32,36 +34,71 @@ class DownloadWorker(
 
         try {
             setProgress(progressData(0, "Downloading", fileName, null, null))
-            val finalUri = downloadFinalUrl(fileUrl, fileName, preparedSizeBytes, saver)
+            val finalUri = downloadFinalUrlWithRetry(fileUrl, fileName, preparedSizeBytes, saver)
             val output = progressData(100, "Completed", fileName, null, finalUri.toString())
             setProgress(output)
             Result.success(output)
         } catch (throwable: Throwable) {
-            Result.failure(errorData("Download failed. ${throwable.message.orEmpty()}".trim()))
+            Result.failure(errorData(throwable.message ?: "Download failed"))
         }
     }
 
-    private fun downloadFinalUrl(
+    private fun downloadFinalUrlWithRetry(
         fileUrl: String,
         fileName: String,
         preparedSizeBytes: Long?,
         saver: MediaStoreSaver
     ): android.net.Uri {
-        val tempFile = File.createTempFile(UUID.randomUUID().toString(), ".mp4", applicationContext.cacheDir)
+        var lastError: Throwable? = null
+        repeat(MAX_DOWNLOAD_ATTEMPTS) { attemptIndex ->
+            val attempt = attemptIndex + 1
+            try {
+                setProgressAsync(progressData(0, "Downloading • attempt $attempt/$MAX_DOWNLOAD_ATTEMPTS", fileName, null, null))
+                return downloadFinalUrlOnce(fileUrl, fileName, preparedSizeBytes, saver)
+            } catch (expired: FinalUrlExpiredException) {
+                throw expired
+            } catch (throwable: Throwable) {
+                lastError = throwable
+                if (attempt < MAX_DOWNLOAD_ATTEMPTS) {
+                    setProgressAsync(progressData(0, "Retrying download in ${attempt * 2}s", fileName, null, null))
+                    Thread.sleep(attempt * 2_000L)
+                }
+            }
+        }
+        throw lastError ?: IllegalStateException("Download failed")
+    }
+
+    private fun downloadFinalUrlOnce(
+        fileUrl: String,
+        fileName: String,
+        preparedSizeBytes: Long?,
+        saver: MediaStoreSaver
+    ): android.net.Uri {
+        val tempFile = java.io.File.createTempFile(
+            java.util.UUID.randomUUID().toString(),
+            ".mp4",
+            applicationContext.cacheDir
+        )
+        var downloaded = 0L
         try {
             val request = Request.Builder()
                 .url(fileUrl)
                 .header("User-Agent", USER_AGENT)
                 .header("Referer", REFERER)
+                .header("Accept", "*/*")
+                .header("Connection", "keep-alive")
                 .build()
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) throw IllegalStateException("Download failed: HTTP ${response.code}")
-                val body = response.body ?: throw IllegalStateException("Download failed: empty response.")
-                val totalBytes = body.contentLength().takeIf { it > 0L } ?: preparedSizeBytes
+                if (response.code in EXPIRED_STATUS_CODES) {
+                    throw FinalUrlExpiredException("Final URL expired or not ready. Prepare again. HTTP ${response.code}")
+                }
+                if (!response.isSuccessful) throw IOException("Download failed: HTTP ${response.code}")
+                val body = response.body ?: throw IOException("Download failed: empty response.")
+                val contentLength = body.contentLength().takeIf { it > 0L }
+                val expectedBytes = contentLength ?: preparedSizeBytes
                 tempFile.outputStream().use { output ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        var downloaded = 0L
                         var lastUpdate = 0L
                         val startedAt = System.currentTimeMillis()
                         while (true) {
@@ -71,7 +108,7 @@ class DownloadWorker(
                             downloaded += read
                             val now = System.currentTimeMillis()
                             if (now - lastUpdate > 500) {
-                                val progress = totalBytes?.let { ((downloaded * 100) / it).toInt().coerceIn(0, 99) } ?: 0
+                                val progress = expectedBytes?.let { ((downloaded * 100) / it).toInt().coerceIn(0, 99) } ?: 0
                                 val speed = if (now > startedAt) downloaded * 1000 / (now - startedAt) else null
                                 setProgressAsync(progressData(progress, "Downloading", fileName, speed, null))
                                 lastUpdate = now
@@ -79,6 +116,7 @@ class DownloadWorker(
                         }
                     }
                 }
+                validateDownloadedSize(downloaded, contentLength, preparedSizeBytes)
             }
             return saver.saveVideoFile(tempFile, fileName, "video/mp4")
         } finally {
@@ -86,10 +124,12 @@ class DownloadWorker(
         }
     }
 
-    private fun mimeTypeFor(extension: String): String = when (extension.lowercase()) {
-        "m4a" -> "audio/mp4"
-        "mp3" -> "audio/mpeg"
-        else -> "video/mp4"
+    private fun validateDownloadedSize(downloaded: Long, contentLength: Long?, preparedSizeBytes: Long?) {
+        val expected = contentLength ?: preparedSizeBytes ?: return
+        val minimumValidSize = (expected.toDouble() * MIN_VALID_DOWNLOAD_RATIO).toLong()
+        if (downloaded < minimumValidSize) {
+            throw IOException("Partial download detected: $downloaded of $expected bytes")
+        }
     }
 
     private fun progressData(progress: Int, status: String, fileName: String, speedBytesPerSecond: Long?, uri: String?): Data =
@@ -103,6 +143,8 @@ class DownloadWorker(
 
     private fun errorData(message: String): Data = Data.Builder().putString(KEY_ERROR, message).putString(KEY_STATUS, "Failed").build()
 
+    private class FinalUrlExpiredException(message: String) : IOException(message)
+
     companion object {
         const val KEY_FILE_URL = "file_url"
         const val KEY_FILE_NAME = "file_name"
@@ -114,5 +156,8 @@ class DownloadWorker(
         const val KEY_ERROR = "error"
         private const val REFERER = "https://app.ytdown.to/en27/"
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        private const val MAX_DOWNLOAD_ATTEMPTS = 3
+        private const val MIN_VALID_DOWNLOAD_RATIO = 0.98
+        private val EXPIRED_STATUS_CODES = setOf(403, 404, 410)
     }
 }
