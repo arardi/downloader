@@ -1,12 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="background">#090A0F</color>
-    <color name="card">#151923</color>
-    <color name="card_secondary">#202636</color>
+    <color name="background">#090B12</color>
+    <color name="surface">#141824</color>
+    <color name="surface_elevated">#1B2130</color>
+    <color name="surface_soft">#20283A</color>
     <color name="primary">#0A84FF</color>
+    <color name="primary_soft">#153B66</color>
     <color name="text_primary">#F5F7FA</color>
     <color name="text_secondary">#AAB2C0</color>
-    <color name="danger">#FF5A66</color>
+    <color name="text_muted">#747D91</color>
     <color name="success">#30D158</color>
+    <color name="success_soft">#263F36</color>
+    <color name="warning">#FFD60A</color>
+    <color name="danger">#FF5A66</color>
+    <color name="danger_soft">#422632</color>
+    <color name="border">#2B3346</color>
     <color name="transparent">#00000000</color>
 </resources>
