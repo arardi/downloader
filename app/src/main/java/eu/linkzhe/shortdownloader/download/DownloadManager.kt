@@ -4,26 +4,21 @@ import android.content.Context
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
-import eu.linkzhe.shortdownloader.model.DownloadFormat
-import eu.linkzhe.shortdownloader.model.VideoInfo
+import eu.linkzhe.shortdownloader.model.PreparedDownload
 import eu.linkzhe.shortdownloader.util.FileNameSanitizer
 
 class DownloadManager(private val context: Context) {
-    fun download(format: DownloadFormat, videoInfo: VideoInfo): OneTimeWorkRequest {
-        val ytdlpFormat = format.ytdlpFormat
-        val directUrl = format.directUrl
-        if (ytdlpFormat.isNullOrBlank() && directUrl.isNullOrBlank()) {
-            throw IllegalArgumentException("No downloadable format found.")
+    fun download(preparedDownload: PreparedDownload): OneTimeWorkRequest {
+        if (preparedDownload.fileUrl.isBlank()) {
+            throw IllegalArgumentException("No final download URL found.")
         }
 
-        val fileName = "${FileNameSanitizer.sanitize(videoInfo.title)}-${videoInfo.videoId}.mp4"
+        val fileName = FileNameSanitizer.sanitize(preparedDownload.fileName, "video.mp4")
+            .let { if (it.endsWith(".mp4", ignoreCase = true)) it else "$it.mp4" }
         val data = Data.Builder()
-            .putString(DownloadWorker.KEY_URL, videoInfo.originalUrl)
-            .putString(DownloadWorker.KEY_DIRECT_URL, directUrl)
-            .putString(DownloadWorker.KEY_YTDLP_FORMAT, ytdlpFormat)
+            .putString(DownloadWorker.KEY_FILE_URL, preparedDownload.fileUrl)
             .putString(DownloadWorker.KEY_FILE_NAME, fileName)
-            .putString(DownloadWorker.KEY_TITLE, videoInfo.title)
-            .putString(DownloadWorker.KEY_VIDEO_ID, videoInfo.videoId)
+            .putLong(DownloadWorker.KEY_FILE_SIZE_BYTES, preparedDownload.fileSizeBytes ?: -1L)
             .build()
         val request = OneTimeWorkRequest.Builder(DownloadWorker::class.java)
             .setInputData(data)

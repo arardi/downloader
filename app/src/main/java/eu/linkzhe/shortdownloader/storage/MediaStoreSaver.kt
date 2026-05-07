@@ -56,12 +56,12 @@ class MediaStoreSaver(private val context: Context) {
         }
     }
 
-    fun publish(uri: Uri, legacyPath: String?) {
+    fun publish(uri: Uri, legacyPath: String?, mimeType: String = "video/mp4") {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
             context.contentResolver.update(uri, values, null, null)
         } else if (!legacyPath.isNullOrBlank()) {
-            MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf("video/mp4"), null)
+            MediaScannerConnection.scanFile(context, arrayOf(legacyPath), arrayOf(mimeType), null)
         }
     }
 
