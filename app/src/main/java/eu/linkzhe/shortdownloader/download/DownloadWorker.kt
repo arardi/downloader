@@ -47,7 +47,7 @@ class DownloadWorker(
         preparedSizeBytes: Long?,
         saver: MediaStoreSaver
     ): android.net.Uri {
-        val tempFile = File.createTempFile(UUID.randomUUID().toString(), ".mp4", applicationContext.cacheDir)
+        val tempFile = java.io.File.createTempFile(java.util.UUID.randomUUID().toString(), ".mp4", applicationContext.cacheDir)
         try {
             val request = Request.Builder()
                 .url(fileUrl)
