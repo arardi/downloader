@@ -9,17 +9,12 @@ android {
 
     defaultConfig {
         applicationId = "eu.linkzhe.shortdownloader"
-        minSdk = 24
+        minSdk = 23
         targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
     }
 
-    packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-    }
 }
 
 kotlin {
@@ -27,9 +22,6 @@ kotlin {
 }
 
 dependencies {
-    implementation("io.github.junkfood02.youtubedl-android:library:0.18.0")
-    implementation("io.github.junkfood02.youtubedl-android:ffmpeg:0.18.0")
-    implementation("io.github.junkfood02.youtubedl-android:aria2c:0.18.0")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
