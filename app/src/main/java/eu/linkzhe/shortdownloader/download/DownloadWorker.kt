@@ -11,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
+// Keep File and UUID imports above for the final-file download temp file.
 class DownloadWorker(
     appContext: Context,
     params: WorkerParameters
