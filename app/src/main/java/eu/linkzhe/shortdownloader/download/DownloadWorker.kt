@@ -9,8 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.File
-import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class DownloadWorker(
@@ -85,6 +83,12 @@ class DownloadWorker(
         } finally {
             tempFile.delete()
         }
+    }
+
+    private fun mimeTypeFor(extension: String): String = when (extension.lowercase()) {
+        "m4a" -> "audio/mp4"
+        "mp3" -> "audio/mpeg"
+        else -> "video/mp4"
     }
 
     private fun progressData(progress: Int, status: String, fileName: String, speedBytesPerSecond: Long?, uri: String?): Data =
