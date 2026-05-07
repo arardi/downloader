@@ -21,17 +21,17 @@ class DownloadWorker(
         .build()
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val directUrl = inputData.getString(KEY_DIRECT_URL)
-        if (directUrl.isNullOrBlank()) {
-            return@withContext Result.failure(errorData("No downloadable format found."))
+        val fileUrl = inputData.getString(KEY_FILE_URL)
+        if (fileUrl.isNullOrBlank()) {
+            return@withContext Result.failure(errorData("No final download URL found."))
         }
         val fileName = inputData.getString(KEY_FILE_NAME) ?: "video.mp4"
-        val extension = inputData.getString(KEY_EXTENSION) ?: fileName.substringAfterLast('.', "mp4")
+        val preparedSizeBytes = inputData.getLong(KEY_FILE_SIZE_BYTES, -1L).takeIf { it > 0L }
         val saver = MediaStoreSaver(applicationContext)
 
         try {
             setProgress(progressData(0, "Downloading", fileName, null, null))
-            val finalUri = downloadDirectUrl(directUrl, fileName, extension, saver)
+            val finalUri = downloadFinalUrl(fileUrl, fileName, preparedSizeBytes, saver)
             val output = progressData(100, "Completed", fileName, null, finalUri.toString())
             setProgress(output)
             Result.success(output)
@@ -40,24 +40,24 @@ class DownloadWorker(
         }
     }
 
-    private fun downloadDirectUrl(
-        directUrl: String,
+    private fun downloadFinalUrl(
+        fileUrl: String,
         fileName: String,
-        extension: String,
+        preparedSizeBytes: Long?,
         saver: MediaStoreSaver
     ): android.net.Uri {
-        val mimeType = mimeTypeFor(extension)
-        val pending = saver.createVideo(fileName, mimeType)
+        val tempFile = File.createTempFile(UUID.randomUUID().toString(), ".mp4", applicationContext.cacheDir)
         try {
             val request = Request.Builder()
-                .url(directUrl)
+                .url(fileUrl)
                 .header("User-Agent", USER_AGENT)
+                .header("Referer", REFERER)
                 .build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw IllegalStateException("Download failed: HTTP ${response.code}")
                 val body = response.body ?: throw IllegalStateException("Download failed: empty response.")
-                val totalBytes = body.contentLength().takeIf { it > 0L }
-                pending.stream.use { output ->
+                val totalBytes = body.contentLength().takeIf { it > 0L } ?: preparedSizeBytes
+                tempFile.outputStream().use { output ->
                     body.byteStream().use { input ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         var downloaded = 0L
@@ -79,12 +79,9 @@ class DownloadWorker(
                     }
                 }
             }
-            saver.publish(pending.uri, pending.legacyPath, mimeType)
-            return pending.uri
-        } catch (throwable: Throwable) {
-            runCatching { pending.stream.close() }
-            saver.delete(pending.uri)
-            throw throwable
+            return saver.saveVideoFile(tempFile, fileName, "video/mp4")
+        } finally {
+            tempFile.delete()
         }
     }
 
@@ -106,16 +103,15 @@ class DownloadWorker(
     private fun errorData(message: String): Data = Data.Builder().putString(KEY_ERROR, message).putString(KEY_STATUS, "Failed").build()
 
     companion object {
-        const val KEY_DIRECT_URL = "direct_url"
+        const val KEY_FILE_URL = "file_url"
         const val KEY_FILE_NAME = "file_name"
-        const val KEY_TITLE = "title"
-        const val KEY_VIDEO_ID = "video_id"
-        const val KEY_EXTENSION = "extension"
+        const val KEY_FILE_SIZE_BYTES = "file_size_bytes"
         const val KEY_PROGRESS = "progress"
         const val KEY_STATUS = "status"
         const val KEY_SPEED = "speed"
         const val KEY_OUTPUT_URI = "output_uri"
         const val KEY_ERROR = "error"
-        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+        private const val REFERER = "https://app.ytdown.to/en27/"
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
     }
 }

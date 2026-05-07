@@ -1,9 +1,12 @@
 package eu.linkzhe.shortdownloader.extractor
 
 import eu.linkzhe.shortdownloader.model.DownloadFormat
+import eu.linkzhe.shortdownloader.model.PreparedDownload
 import eu.linkzhe.shortdownloader.model.VideoInfo
+import eu.linkzhe.shortdownloader.util.FileNameSanitizer
 import eu.linkzhe.shortdownloader.util.UrlParser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Cookie
 import okhttp3.CookieJar
@@ -27,9 +30,42 @@ class YtdownApiExtractor : VideoExtractor {
             ?: throw IllegalArgumentException("Invalid YouTube URL")
 
         warmupSession()
+        parseVideoInfo(postProxy(url), url, videoId)
+    }
 
+    override suspend fun prepareDownload(format: DownloadFormat): PreparedDownload = withContext(Dispatchers.IO) {
+        warmupSession()
+        var lastProgress: String? = null
+        repeat(PREPARE_ATTEMPTS) { attempt ->
+            val api = postProxy(format.mediaUrl).optJSONObject("api")
+                ?: throw IllegalStateException("API response is missing download data")
+            val status = api.optCleanString("status")
+            if (status.equals("completed", ignoreCase = true)) {
+                return@withContext parsePreparedDownload(api, format)
+            }
+
+            lastProgress = api.optCleanString("progress") ?: api.optCleanString("percent") ?: status
+            if (!status.isProcessingStatus()) {
+                throw IllegalStateException(lastProgress ?: "Download preparation not completed")
+            }
+            if (attempt < PREPARE_ATTEMPTS - 1) delay(PREPARE_RETRY_DELAY_MS)
+        }
+        throw IllegalStateException("Video is still processing. Please try again.")
+    }
+
+    private fun warmupSession() {
+        val request = Request.Builder()
+            .url(WARMUP_URL)
+            .header("User-Agent", USER_AGENT)
+            .build()
+        runCatching {
+            client.newCall(request).execute().close()
+        }
+    }
+
+    private fun postProxy(urlValue: String): JSONObject {
         val body = FormBody.Builder()
-            .add("url", url)
+            .add("url", urlValue)
             .build()
 
         val request = Request.Builder()
@@ -44,29 +80,14 @@ class YtdownApiExtractor : VideoExtractor {
             .build()
 
         client.newCall(request).execute().use { response ->
-            val jsonText = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw IllegalStateException("API error HTTP ${response.code}")
-            }
-            if (jsonText.isBlank()) {
-                throw IllegalStateException("API returned empty response")
-            }
-            parseVideoInfo(jsonText, url, videoId)
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IllegalStateException("API HTTP ${response.code}")
+            if (text.isBlank()) throw IllegalStateException("API returned empty response")
+            return JSONObject(text)
         }
     }
 
-    private fun warmupSession() {
-        val request = Request.Builder()
-            .url(WARMUP_URL)
-            .header("User-Agent", USER_AGENT)
-            .build()
-        runCatching {
-            client.newCall(request).execute().close()
-        }
-    }
-
-    private fun parseVideoInfo(jsonText: String, originalUrl: String, fallbackVideoId: String): VideoInfo {
-        val root = JSONObject(jsonText)
+    private fun parseVideoInfo(root: JSONObject, originalUrl: String, fallbackVideoId: String): VideoInfo {
         val api = root.optJSONObject("api") ?: throw IllegalStateException("API response is missing video data")
         val status = api.optCleanString("status")
         if (!status.equals("ok", ignoreCase = true)) {
@@ -80,27 +101,34 @@ class YtdownApiExtractor : VideoExtractor {
             if (mediaItems != null) {
                 for (index in 0 until mediaItems.length()) {
                     val item = mediaItems.optJSONObject(index) ?: continue
-                    if (!item.optCleanString("type").equals("Video", ignoreCase = true)) continue
+                    val type = item.optCleanString("type") ?: continue
+                    val extension = item.optCleanString("mediaExtension") ?: continue
                     val mediaUrl = item.optCleanString("mediaUrl") ?: continue
+                    if (!type.equals("Video", ignoreCase = true)) continue
+                    if (!extension.equals("MP4", ignoreCase = true)) continue
+
                     val mediaQuality = item.optCleanString("mediaQuality")
                     val mediaRes = item.optCleanString("mediaRes")
-                    val extension = item.optCleanString("mediaExtension")?.lowercase() ?: "mp4"
+                    val fileSize = item.optCleanString("mediaFileSize")
                     add(
                         DownloadFormat(
                             id = item.optCleanString("mediaId") ?: index.toString(),
-                            label = listOfNotNull(mediaQuality, mediaRes).joinToString(" ").ifBlank { "Video ${index + 1}" },
-                            extension = extension,
-                            quality = mediaQuality ?: mediaRes,
+                            label = listOfNotNull(mediaQuality, mediaRes, fileSize).joinToString(" • ").ifBlank { "Video ${index + 1}" },
+                            extension = extension.lowercase(),
+                            quality = mediaQuality,
+                            resolution = mediaRes,
                             fileSizeBytes = null,
-                            fileSizeText = item.optCleanString("mediaFileSize"),
-                            directUrl = mediaUrl,
-                            previewUrl = item.optCleanString("mediaPreviewUrl"),
-                            mediaTask = item.optCleanString("mediaTask")
+                            fileSizeText = fileSize,
+                            mediaUrl = mediaUrl,
+                            mediaPreviewUrl = item.optCleanString("mediaPreviewUrl"),
+                            thumbnailUrl = item.optCleanString("mediaThumbnail"),
+                            mediaTask = item.optCleanString("mediaTask"),
+                            type = type
                         )
                     )
                 }
             }
-        }
+        }.sortedByDescending { it.qualityRank() }
 
         val userInfo = api.optJSONObject("userInfo")
         val stats = api.optJSONObject("mediaStats")
@@ -124,7 +152,32 @@ class YtdownApiExtractor : VideoExtractor {
         )
     }
 
+    private fun parsePreparedDownload(api: JSONObject, format: DownloadFormat): PreparedDownload {
+        val fileUrl = api.optCleanString("fileUrl")
+            ?: throw IllegalStateException("API did not return final file URL")
+        val fallbackName = "ZaShorts-${FileNameSanitizer.sanitize(format.quality ?: format.resolution ?: format.id)}.mp4"
+        return PreparedDownload(
+            fileName = api.optCleanString("fileName") ?: fallbackName,
+            fileUrl = fileUrl,
+            viewUrl = api.optCleanString("viewUrl"),
+            fileSizeText = api.optCleanString("fileSize"),
+            fileSizeBytes = api.optLongOrNull("fileSizeBytes")
+        )
+    }
+
+    private fun DownloadFormat.qualityRank(): Int = resolution?.firstNumber()
+        ?: mediaUrl.substringAfterLast('/').firstNumber()
+        ?: label.firstNumber()
+        ?: 0
+
+    private fun String?.isProcessingStatus(): Boolean = this == null || equals("processing", ignoreCase = true) ||
+        equals("pending", ignoreCase = true) || equals("ok", ignoreCase = true) || equals("running", ignoreCase = true)
+
+    private fun String.firstNumber(): Int? = Regex("\\d+").find(this)?.value?.toIntOrNull()
+
     private fun JSONObject.optCleanString(name: String): String? = optString(name).trim().takeIf { it.isNotEmpty() && it != "null" }
+
+    private fun JSONObject.optLongOrNull(name: String): Long? = if (has(name) && !isNull(name)) optLong(name).takeIf { it > 0L } else null
 
     private fun String.toDurationSeconds(): Long? {
         val parts = split(':').mapNotNull { it.toLongOrNull() }
@@ -154,6 +207,8 @@ class YtdownApiExtractor : VideoExtractor {
     companion object {
         private const val API_URL = "https://app.ytdown.to/proxy.php"
         private const val WARMUP_URL = "https://app.ytdown.to/en27/"
-        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36"
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        private const val PREPARE_ATTEMPTS = 5
+        private const val PREPARE_RETRY_DELAY_MS = 2_000L
     }
 }

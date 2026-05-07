@@ -4,27 +4,24 @@ import android.content.Context
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
-import eu.linkzhe.shortdownloader.model.DownloadFormat
-import eu.linkzhe.shortdownloader.model.VideoInfo
+import eu.linkzhe.shortdownloader.model.PreparedDownload
 import eu.linkzhe.shortdownloader.util.FileNameSanitizer
 
 class DownloadManager(private val context: Context) {
-    fun download(format: DownloadFormat, videoInfo: VideoInfo): OneTimeWorkRequest {
-        if (format.directUrl.isBlank()) {
-            throw IllegalArgumentException("No downloadable format found.")
+    fun download(preparedDownload: PreparedDownload): OneTimeWorkRequest {
+        if (preparedDownload.fileUrl.isBlank()) {
+            throw IllegalArgumentException("No final download URL found.")
         }
         if (!format.extension.equals("mp4", ignoreCase = true)) {
             throw IllegalArgumentException("Only Video MP4 downloads are supported right now.")
         }
 
-        val quality = FileNameSanitizer.sanitize(format.quality ?: format.label, "video")
-        val fileName = "${FileNameSanitizer.sanitize(videoInfo.title)}-${videoInfo.videoId}-$quality.mp4"
+        val fileName = FileNameSanitizer.sanitize(preparedDownload.fileName, "video.mp4")
+            .let { if (it.endsWith(".mp4", ignoreCase = true)) it else "$it.mp4" }
         val data = Data.Builder()
-            .putString(DownloadWorker.KEY_DIRECT_URL, format.directUrl)
+            .putString(DownloadWorker.KEY_FILE_URL, preparedDownload.fileUrl)
             .putString(DownloadWorker.KEY_FILE_NAME, fileName)
-            .putString(DownloadWorker.KEY_TITLE, videoInfo.title)
-            .putString(DownloadWorker.KEY_VIDEO_ID, videoInfo.videoId)
-            .putString(DownloadWorker.KEY_EXTENSION, format.extension.lowercase())
+            .putLong(DownloadWorker.KEY_FILE_SIZE_BYTES, preparedDownload.fileSizeBytes ?: -1L)
             .build()
         val request = OneTimeWorkRequest.Builder(DownloadWorker::class.java)
             .setInputData(data)
