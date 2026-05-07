@@ -155,9 +155,17 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         formatSection.visibility = View.VISIBLE
         formatsContainer.removeAllViews()
         formatButtons.clear()
-        if (videoInfo.formats.isEmpty()) {
+
+        val mp4Formats: List<DownloadFormat> = videoInfo.formats
+            .filter { format ->
+                format.type.equals("Video", ignoreCase = true) &&
+                    format.extension.equals("mp4", ignoreCase = true) &&
+                    format.mediaUrl.isNotBlank()
+            }
+
+        if (mp4Formats.isEmpty()) {
             val empty = TextView(this).apply {
-                text = "No downloadable format returned by API."
+                text = "No MP4 video quality returned by API."
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
                 textSize = 14f
                 setPadding(0, 14, 0, 0)
@@ -166,8 +174,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             return
         }
 
-        mp4Formats.forEach { format ->
+        mp4Formats.forEach { format: DownloadFormat ->
             val item = LayoutInflater.from(this).inflate(R.layout.item_format, formatsContainer, false)
+
             item.findViewById<TextView>(R.id.qualityBadge).text = format.qualityBadge()
             item.findViewById<TextView>(R.id.formatLabel).text = format.label
             item.findViewById<TextView>(R.id.formatMeta).text = listOfNotNull(
@@ -175,12 +184,15 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 format.extension.uppercase(),
                 format.fileSizeText
             ).joinToString(" • ")
-            item.findViewById<TextView>(R.id.taskBadge).visibility = if (format.mediaTask.equals("merge", ignoreCase = true)) View.VISIBLE else View.GONE
+
+            item.findViewById<TextView>(R.id.taskBadge).visibility =
+                if (format.mediaTask.equals("merge", ignoreCase = true)) View.VISIBLE else View.GONE
+
             val downloadButton = item.findViewById<Button>(R.id.downloadButton)
-            val downloadable = format.mediaUrl.isNotBlank()
-            downloadButton.isEnabled = downloadable
-            downloadButton.alpha = if (downloadable) 1f else 0.5f
+            downloadButton.isEnabled = true
+            downloadButton.alpha = 1f
             downloadButton.setOnClickListener { startDownload(format) }
+
             formatButtons.add(downloadButton)
             formatsContainer.addView(item)
         }

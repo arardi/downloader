@@ -12,9 +12,6 @@ class DownloadManager(private val context: Context) {
         if (preparedDownload.fileUrl.isBlank()) {
             throw IllegalArgumentException("No final download URL found.")
         }
-        if (!format.extension.equals("mp4", ignoreCase = true)) {
-            throw IllegalArgumentException("Only Video MP4 downloads are supported right now.")
-        }
 
         val fileName = FileNameSanitizer.sanitize(preparedDownload.fileName, "video.mp4")
             .let { if (it.endsWith(".mp4", ignoreCase = true)) it else "$it.mp4" }
