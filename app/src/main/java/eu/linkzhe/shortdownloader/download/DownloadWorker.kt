@@ -11,7 +11,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
-// Keep File and UUID imports above for the final-file download temp file.
 class DownloadWorker(
     appContext: Context,
     params: WorkerParameters
@@ -47,7 +46,11 @@ class DownloadWorker(
         preparedSizeBytes: Long?,
         saver: MediaStoreSaver
     ): android.net.Uri {
-        val tempFile = File.createTempFile(UUID.randomUUID().toString(), ".mp4", applicationContext.cacheDir)
+        val tempFile = java.io.File.createTempFile(
+            java.util.UUID.randomUUID().toString(),
+            ".mp4",
+            applicationContext.cacheDir
+        )
         try {
             val request = Request.Builder()
                 .url(fileUrl)
