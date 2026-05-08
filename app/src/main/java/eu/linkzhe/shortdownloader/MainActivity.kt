@@ -19,6 +19,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -55,22 +56,27 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private lateinit var videoIdText: TextView
     private lateinit var formatSection: View
     private lateinit var formatsContainer: LinearLayout
-    private lateinit var downloadCard: View
+    private lateinit var downloadBottomSheet: View
     private lateinit var downloadFileText: TextView
     private lateinit var downloadStatusText: TextView
     private lateinit var downloadSizeText: TextView
     private lateinit var downloadProgress: ProgressBar
     private lateinit var downloadPercentText: TextView
     private lateinit var openFileButton: Button
+    private lateinit var retryButton: Button
 
     private val formatButtons = mutableListOf<Button>()
     private var currentVideoInfo: VideoInfo? = null
     private var completedUri: Uri? = null
     private var activeFormat: DownloadFormat? = null
+    private var lastSelectedFormat: DownloadFormat? = null
     private var activeFormatAutoReprepared = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        window.statusBarColor = ContextCompat.getColor(this, R.color.app_background)
+        window.navigationBarColor = ContextCompat.getColor(this, R.color.app_background)
         downloadManager = DownloadManager(applicationContext)
         bindViews()
         bindActions()
@@ -90,13 +96,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         videoIdText = findViewById(R.id.videoIdText)
         formatSection = findViewById(R.id.formatSection)
         formatsContainer = findViewById(R.id.formatsContainer)
-        downloadCard = findViewById(R.id.downloadCard)
+        downloadBottomSheet = findViewById(R.id.downloadBottomSheet)
         downloadFileText = findViewById(R.id.downloadFileText)
         downloadStatusText = findViewById(R.id.downloadStatusText)
         downloadSizeText = findViewById(R.id.downloadSizeText)
         downloadProgress = findViewById(R.id.downloadProgress)
         downloadPercentText = findViewById(R.id.downloadPercentText)
         openFileButton = findViewById(R.id.openFileButton)
+        retryButton = findViewById(R.id.retryButton)
     }
 
     private fun bindActions() {
@@ -104,13 +111,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         findViewById<Button>(R.id.clearButton).setOnClickListener { clearInput() }
         findViewById<Button>(R.id.analyzeButton).setOnClickListener { analyzeUrl() }
         findViewById<Button>(R.id.refreshButton).setOnClickListener { analyzeUrl() }
-        openFileButton.setOnClickListener {
-            if (completedUri != null) {
-                openCompletedFile()
-            } else {
-                activeFormat?.let { startDownload(it) }
-            }
-        }
+        openFileButton.setOnClickListener { openCompletedFile() }
+        retryButton.setOnClickListener { lastSelectedFormat?.let { startDownload(it) } }
     }
 
     private fun pasteFromClipboard() {
@@ -124,9 +126,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         statusText.visibility = View.GONE
         detailCard.visibility = View.GONE
         formatSection.visibility = View.GONE
-        downloadCard.visibility = View.GONE
+        downloadBottomSheet.visibility = View.GONE
         completedUri = null
         activeFormat = null
+        lastSelectedFormat = null
         activeFormatAutoReprepared = false
         formatButtons.clear()
     }
@@ -158,7 +161,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         durationText.text = videoInfo.durationText ?: TimeFormat.duration(videoInfo.durationSeconds)
         viewsText.text = videoInfo.viewsText ?: "Views unknown"
         videoIdText.text = videoInfo.videoId.take(6)
-        showInfo("API status: ${videoInfo.apiStatus ?: "ok"}")
+        showInfo("Ready: choose a quality to download")
         loadThumbnail(videoInfo.thumbnailUrl)
         renderFormats(videoInfo)
     }
@@ -192,11 +195,12 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             item.findViewById<TextView>(R.id.qualityBadge).text = format.qualityBadge()
             item.findViewById<TextView>(R.id.formatLabel).text = format.displayTitle()
             item.findViewById<TextView>(R.id.formatMeta).text = listOfNotNull(
+                format.resolution,
                 format.extension.uppercase(),
                 format.fileSizeText
             ).joinToString(" • ")
             item.findViewById<TextView>(R.id.taskBadge).apply {
-                text = "Prepared by API"
+                text = "API ready"
                 visibility = View.VISIBLE
             }
 
@@ -218,6 +222,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         }
 
         activeFormat = format
+        lastSelectedFormat = format
         activeFormatAutoReprepared = false
         prepareAndStartDownload(format)
     }
@@ -225,22 +230,23 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private fun prepareAndStartDownload(format: DownloadFormat) {
         setFormatButtonsEnabled(false)
         completedUri = null
-        downloadCard.visibility = View.VISIBLE
+        downloadBottomSheet.visibility = View.VISIBLE
         openFileButton.visibility = View.GONE
+        retryButton.visibility = View.GONE
         downloadProgress.isIndeterminate = true
         downloadProgress.progress = 5
-        downloadFileText.text = "Preparing ${format.qualityBadge()}..."
-        downloadStatusText.text = "Waiting for final file URL..."
-        downloadSizeText.text = format.fileSizeText?.let { "Estimated size: $it" } ?: "Preparing selected quality"
+        downloadStatusText.text = "Preparing..."
+        downloadFileText.text = "Preparing ${format.qualityBadge()}"
+        downloadSizeText.text = format.fileSizeText?.let { "Estimated size: $it" } ?: "Waiting for final file URL"
         downloadPercentText.text = "5%"
-        showInfo("Preparing selected quality...")
+        statusText.visibility = View.GONE
 
         lifecycleScope.launch {
             val preparedResult = runCatching {
                 extractor.prepareDownload(format) { message ->
                     runOnUiThread {
                         downloadStatusText.text = message
-                        statusText.text = message
+                        downloadSizeText.text = "Preparing final file URL"
                     }
                 }
             }
@@ -249,21 +255,22 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             }.onFailure {
                 setFormatButtonsEnabled(true)
                 downloadProgress.isIndeterminate = false
-                downloadStatusText.text = "Preparation failed"
-                downloadFileText.text = "Download failed"
-                downloadSizeText.text = it.message ?: "File is still being prepared. Please try again."
-                openFileButton.text = "Retry"
-                openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_retry, 0, 0, 0)
-                openFileButton.visibility = View.VISIBLE
+                downloadStatusText.text = "Download failed"
+                downloadFileText.text = "Preparation failed"
+                downloadSizeText.text = it.message ?: "Final URL is not ready. Please try again."
+                retryButton.visibility = View.VISIBLE
+                openFileButton.visibility = View.GONE
                 showError("Could not prepare this quality. ${it.message.orEmpty()}".trim())
             }
         }
     }
 
     private fun beginPreparedDownload(prepared: PreparedDownload) {
-        showInfo("Final URL ready. Downloading...")
+        statusText.visibility = View.GONE
         downloadProgress.isIndeterminate = false
         downloadProgress.progress = 0
+        retryButton.visibility = View.GONE
+        openFileButton.visibility = View.GONE
         downloadStatusText.text = "Downloading..."
         downloadFileText.text = prepared.fileName
         downloadSizeText.text = prepared.fileSizeText?.let { "File size: $it" } ?: "Saving to Movies/ZaShortsDownloader"
@@ -271,6 +278,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val request = runCatching { downloadManager.download(prepared) }
             .getOrElse {
                 setFormatButtonsEnabled(true)
+                downloadStatusText.text = "Download failed"
+                downloadSizeText.text = it.message ?: getString(R.string.no_downloadable_format)
+                retryButton.visibility = View.VISIBLE
                 showError(it.message ?: getString(R.string.no_downloadable_format))
                 return
             }
@@ -310,6 +320,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             downloadSizeText.text = fileName
             openFileButton.text = "Open file"
             openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_open, 0, 0, 0)
+            retryButton.visibility = View.GONE
             openFileButton.visibility = View.VISIBLE
             setFormatButtonsEnabled(true)
         } else if (info.state == WorkInfo.State.FAILED) {
@@ -320,9 +331,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             }
             downloadFileText.text = "Download failed"
             downloadStatusText.text = message
-            openFileButton.text = "Retry"
-            openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_retry, 0, 0, 0)
-            openFileButton.visibility = View.VISIBLE
+            retryButton.visibility = View.VISIBLE
+            openFileButton.visibility = View.GONE
             setFormatButtonsEnabled(true)
         }
     }
@@ -345,9 +355,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         activeFormatAutoReprepared = true
         downloadProgress.isIndeterminate = true
         downloadFileText.text = "Preparing again..."
-        downloadStatusText.text = "Final URL expired. Preparing again..."
-        downloadSizeText.text = "Refreshing the final file URL once"
-        showInfo("Final URL expired. Preparing again...")
+        downloadStatusText.text = "Preparing again..."
+        downloadSizeText.text = "Final URL expired. Refreshing token"
+        retryButton.visibility = View.GONE
+        statusText.visibility = View.GONE
         prepareAndStartDownload(format)
     }
 
