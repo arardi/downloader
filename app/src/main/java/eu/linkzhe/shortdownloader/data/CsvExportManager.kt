@@ -48,7 +48,14 @@ class CsvExportManager(private val context: Context) {
         val relativePath = "${Environment.DIRECTORY_MOVIES}/${StoragePathSanitizer.APP_DIRECTORY}/csv"
         val bytes = content.toByteArray(Charsets.UTF_8)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            saveCsvToMediaStore(displayName, relativePath, bytes)
+            runCatching { saveCsvToMediaStore(displayName, relativePath, bytes) }
+                .getOrElse { mediaStoreError ->
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+                        saveDirectCsv(displayName, relativePath, bytes)
+                    } else {
+                        throw IllegalStateException("Unable to create CSV in Movies/ZaVideoDownloader/csv: ${mediaStoreError.message.orEmpty()}", mediaStoreError)
+                    }
+                }
         } else {
             saveLegacyCsv(displayName, relativePath, bytes)
         }
@@ -99,8 +106,17 @@ class CsvExportManager(private val context: Context) {
     }
 
     private fun saveLegacyCsv(displayName: String, relativePath: String, bytes: ByteArray): SavedCsv {
-        val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "${StoragePathSanitizer.APP_DIRECTORY}/csv")
-        directory.mkdirs()
+        return saveDirectCsv(displayName, relativePath, bytes)
+    }
+
+    private fun saveDirectCsv(displayName: String, relativePath: String, bytes: ByteArray): SavedCsv {
+        val directory = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+            "${StoragePathSanitizer.APP_DIRECTORY}/csv"
+        )
+        if (!directory.exists() && !directory.mkdirs()) {
+            error("Cannot create CSV folder at Movies/ZaVideoDownloader/csv.")
+        }
         val file = File(directory, displayName)
         file.writeBytes(bytes)
         MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(MIME_TYPE), null)
