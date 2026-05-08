@@ -12,7 +12,7 @@
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_video"
         android:supportsRtl="true"
-        android:theme="@style/Theme.ZaShortsDownloader">
+        android:theme="@style/Theme.ZaVideoDownloader">
         <activity
             android:name=".MainActivity"
             android:exported="true">

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ZaShortsDownloader"
+rootProject.name = "ZaVideoDownloader"
 include(":app")

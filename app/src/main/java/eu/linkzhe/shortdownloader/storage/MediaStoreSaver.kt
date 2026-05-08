@@ -19,7 +19,7 @@ class MediaStoreSaver(private val context: Context) {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
             put(MediaStore.Video.Media.MIME_TYPE, mimeType)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ZaShortsDownloader")
+                put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ZaVideoDownloader")
                 put(MediaStore.Video.Media.IS_PENDING, 1)
             }
         }
@@ -27,7 +27,7 @@ class MediaStoreSaver(private val context: Context) {
         val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         } else {
-            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "ZaShortsDownloader")
+            val directory = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "ZaVideoDownloader")
             directory.mkdirs()
             val file = File(directory, displayName)
             values.put(MediaStore.Video.Media.DATA, file.absolutePath)

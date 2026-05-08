@@ -9,6 +9,8 @@ data class VideoInfo(
     val durationText: String? = null,
     val thumbnailUrl: String?,
     val viewsText: String? = null,
+    val description: String? = null,
+    val tags: String? = null,
     val apiStatus: String? = null,
     val originalUrl: String,
     val formats: List<DownloadFormat>
