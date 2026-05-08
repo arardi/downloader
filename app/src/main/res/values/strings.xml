@@ -5,4 +5,5 @@
     <string name="disclaimer">Only download videos you own or have permission to save.</string>
     <string name="unable_extract">Unable to extract video details. Please try another video or update the app.</string>
     <string name="no_downloadable_format">No downloadable format found.</string>
+    <string name="close">Close</string>
 </resources>

@@ -10,6 +10,7 @@ data class DownloadedVideo(
     val tags: String?,
     val quality: String?,
     val fileSizeText: String?,
-    val filePathOrUri: String,
+    val contentUri: String,
+    val readablePath: String,
     val downloadedAt: Long
 )
