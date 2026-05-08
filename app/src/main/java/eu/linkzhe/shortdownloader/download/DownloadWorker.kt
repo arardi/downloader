@@ -5,6 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.WorkerParameters
 import eu.linkzhe.shortdownloader.storage.MediaStoreSaver
+import eu.linkzhe.shortdownloader.storage.SavedMedia
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -30,12 +31,13 @@ class DownloadWorker(
         }
         val fileName = inputData.getString(KEY_FILE_NAME) ?: "video.mp4"
         val preparedSizeBytes = inputData.getLong(KEY_FILE_SIZE_BYTES, -1L).takeIf { it > 0L }
+        val channelName = inputData.getString(KEY_CHANNEL_NAME)
         val saver = MediaStoreSaver(applicationContext)
 
         try {
             setProgress(progressData(0, "Downloading", fileName, null, null))
-            val finalUri = downloadFinalUrlWithRetry(fileUrl, fileName, preparedSizeBytes, saver)
-            val output = progressData(100, "Completed", fileName, null, finalUri.toString())
+            val saved = downloadFinalUrlWithRetry(fileUrl, fileName, preparedSizeBytes, channelName, saver)
+            val output = completedData(saved)
             setProgress(output)
             Result.success(output)
         } catch (throwable: Throwable) {
@@ -47,14 +49,15 @@ class DownloadWorker(
         fileUrl: String,
         fileName: String,
         preparedSizeBytes: Long?,
+        channelName: String?,
         saver: MediaStoreSaver
-    ): android.net.Uri {
+    ): SavedMedia {
         var lastError: Throwable? = null
         repeat(MAX_DOWNLOAD_ATTEMPTS) { attemptIndex ->
             val attempt = attemptIndex + 1
             try {
                 setProgressAsync(progressData(0, "Downloading • attempt $attempt/$MAX_DOWNLOAD_ATTEMPTS", fileName, null, null))
-                return downloadFinalUrlOnce(fileUrl, fileName, preparedSizeBytes, saver)
+                return downloadFinalUrlOnce(fileUrl, fileName, preparedSizeBytes, channelName, saver)
             } catch (throwable: Throwable) {
                 lastError = throwable
                 if (attempt < MAX_DOWNLOAD_ATTEMPTS) {
@@ -71,8 +74,9 @@ class DownloadWorker(
         fileUrl: String,
         fileName: String,
         preparedSizeBytes: Long?,
+        channelName: String?,
         saver: MediaStoreSaver
-    ): android.net.Uri {
+    ): SavedMedia {
         val tempFile = java.io.File.createTempFile(
             java.util.UUID.randomUUID().toString(),
             ".mp4",
@@ -117,7 +121,7 @@ class DownloadWorker(
                 }
                 validateDownloadedSize(downloaded, contentLength, preparedSizeBytes)
             }
-            return saver.saveVideoFile(tempFile, fileName, "video/mp4")
+            return saver.saveVideoFile(tempFile, fileName, "video/mp4", channelName)
         } finally {
             tempFile.delete()
         }
@@ -137,6 +141,16 @@ class DownloadWorker(
         }
     }
 
+    private fun completedData(saved: SavedMedia): Data = Data.Builder()
+        .putInt(KEY_PROGRESS, 100)
+        .putString(KEY_STATUS, "Completed")
+        .putString(KEY_FILE_NAME, saved.displayName)
+        .putString(KEY_OUTPUT_URI, saved.uri.toString())
+        .putString(KEY_CONTENT_URI, saved.uri.toString())
+        .putString(KEY_READABLE_PATH, saved.readablePath)
+        .putString(KEY_RELATIVE_PATH, saved.relativePath)
+        .build()
+
     private fun progressData(progress: Int, status: String, fileName: String, speedBytesPerSecond: Long?, uri: String?): Data =
         Data.Builder()
             .putInt(KEY_PROGRESS, progress)
@@ -154,10 +168,20 @@ class DownloadWorker(
         const val KEY_FILE_URL = "file_url"
         const val KEY_FILE_NAME = "file_name"
         const val KEY_FILE_SIZE_BYTES = "file_size_bytes"
+        const val KEY_CHANNEL_NAME = "channel_name"
+        const val KEY_ORIGINAL_URL = "original_url"
+        const val KEY_VIDEO_ID = "video_id"
+        const val KEY_TITLE = "title"
+        const val KEY_DESCRIPTION = "description"
+        const val KEY_TAGS = "tags"
+        const val KEY_QUALITY = "quality"
         const val KEY_PROGRESS = "progress"
         const val KEY_STATUS = "status"
         const val KEY_SPEED = "speed"
         const val KEY_OUTPUT_URI = "output_uri"
+        const val KEY_CONTENT_URI = "content_uri"
+        const val KEY_READABLE_PATH = "readable_path"
+        const val KEY_RELATIVE_PATH = "relative_path"
         const val KEY_ERROR = "error"
         private const val REFERER = "https://app.ytdown.to/en27/"
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"

@@ -16,7 +16,7 @@ class DownloadHistoryStore(context: Context) {
     fun addDownload(video: DownloadedVideo) {
         val items = buildList {
             add(video)
-            addAll(getDownloads().filterNot { it.filePathOrUri == video.filePathOrUri })
+            addAll(getDownloads().filterNot { it.contentUri == video.contentUri || it.readablePath == video.readablePath })
         }.take(MAX_DOWNLOADS)
         prefs.edit().putString(KEY_DOWNLOADS, JSONArray(items.map { it.toJson() }).toString()).apply()
     }
@@ -60,7 +60,8 @@ class DownloadHistoryStore(context: Context) {
                         tags = json.optNullableString("tags"),
                         quality = json.optNullableString("quality"),
                         fileSizeText = json.optNullableString("fileSizeText"),
-                        filePathOrUri = json.optString("filePathOrUri"),
+                        contentUri = json.optString("contentUri").ifBlank { json.optString("filePathOrUri") },
+                        readablePath = json.optString("readablePath").ifBlank { json.optString("filePathOrUri") },
                         downloadedAt = json.optLong("downloadedAt")
                     )
                 )
@@ -95,7 +96,8 @@ class DownloadHistoryStore(context: Context) {
         .put("tags", tags)
         .put("quality", quality)
         .put("fileSizeText", fileSizeText)
-        .put("filePathOrUri", filePathOrUri)
+        .put("contentUri", contentUri)
+        .put("readablePath", readablePath)
         .put("downloadedAt", downloadedAt)
 
     private fun AnalyzedUrl.toJson(): JSONObject = JSONObject()
