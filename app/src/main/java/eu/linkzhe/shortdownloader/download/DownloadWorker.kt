@@ -55,13 +55,12 @@ class DownloadWorker(
             try {
                 setProgressAsync(progressData(0, "Downloading • attempt $attempt/$MAX_DOWNLOAD_ATTEMPTS", fileName, null, null))
                 return downloadFinalUrlOnce(fileUrl, fileName, preparedSizeBytes, saver)
-            } catch (expired: FinalUrlExpiredException) {
-                throw expired
             } catch (throwable: Throwable) {
                 lastError = throwable
                 if (attempt < MAX_DOWNLOAD_ATTEMPTS) {
-                    setProgressAsync(progressData(0, "Retrying download in ${attempt * 2}s", fileName, null, null))
-                    Thread.sleep(attempt * 2_000L)
+                    val nextAttempt = attempt + 1
+                    setProgressAsync(progressData(0, "Retrying download $nextAttempt/$MAX_DOWNLOAD_ATTEMPTS...", fileName, null, null))
+                    Thread.sleep(RETRY_DELAY_MS)
                 }
             }
         }
@@ -125,7 +124,13 @@ class DownloadWorker(
     }
 
     private fun validateDownloadedSize(downloaded: Long, contentLength: Long?, preparedSizeBytes: Long?) {
-        val expected = contentLength ?: preparedSizeBytes ?: return
+        if (downloaded < MIN_VALID_FILE_BYTES) {
+            throw IOException("Partial download detected: file is only $downloaded bytes")
+        }
+        if (contentLength != null && downloaded < contentLength) {
+            throw IOException("Partial download detected: $downloaded of $contentLength bytes")
+        }
+        val expected = preparedSizeBytes ?: return
         val minimumValidSize = (expected.toDouble() * MIN_VALID_DOWNLOAD_RATIO).toLong()
         if (downloaded < minimumValidSize) {
             throw IOException("Partial download detected: $downloaded of $expected bytes")
@@ -158,6 +163,8 @@ class DownloadWorker(
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
         private const val MAX_DOWNLOAD_ATTEMPTS = 3
         private const val MIN_VALID_DOWNLOAD_RATIO = 0.98
+        private const val MIN_VALID_FILE_BYTES = 50 * 1024L
+        private const val RETRY_DELAY_MS = 1_500L
         private val EXPIRED_STATUS_CODES = setOf(403, 404, 410)
     }
 }

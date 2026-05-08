@@ -62,7 +62,7 @@ class YtdownApiExtractor : VideoExtractor {
             }
             if (attempt < PREPARE_ATTEMPTS) delay(prepareDelayMs(attempt))
         }
-        throw IllegalStateException("File is still being prepared. Please try again.")
+        throw IllegalStateException("Final URL is not ready. Please try again.")
     }
 
     private fun warmupSession() {
@@ -227,6 +227,6 @@ class YtdownApiExtractor : VideoExtractor {
         private const val API_URL = "https://app.ytdown.to/proxy.php"
         private const val WARMUP_URL = "https://app.ytdown.to/en27/"
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-        private const val PREPARE_ATTEMPTS = 10
+        private const val PREPARE_ATTEMPTS = 8
     }
 }
