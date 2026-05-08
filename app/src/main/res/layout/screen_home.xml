@@ -113,11 +113,20 @@
             </LinearLayout>
 
             <TextView
+                android:id="@+id/csvAutoInfoText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="CSV otomatis dibuat setelah download selesai."
+                android:textColor="@color/text_muted"
+                android:textSize="12sp" />
+
+            <TextView
                 android:id="@+id/downloadsEmptyText"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
-                android:text="No downloaded videos yet\nStart a new download to see it here"
+                android:text="Belum ada download\nDownload video dulu untuk membuat CSV."
                 android:textColor="@color/text_secondary"
                 android:textSize="13sp" />
 
