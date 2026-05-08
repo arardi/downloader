@@ -121,6 +121,21 @@
                 android:textColor="@color/text_muted"
                 android:textSize="12sp" />
 
+            <Button
+                android:id="@+id/fixCsvPermissionButton"
+                style="@style/Widget.AppCompat.Button.Borderless"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:layout_marginTop="8dp"
+                android:drawableStart="@drawable/ic_file_csv"
+                android:drawablePadding="6dp"
+                android:minWidth="0dp"
+                android:text="Fix CSV Permission"
+                android:textAllCaps="false"
+                android:textColor="@color/danger"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/downloadsEmptyText"
                 android:layout_width="match_parent"

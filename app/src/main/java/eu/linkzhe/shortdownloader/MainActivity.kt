@@ -9,6 +9,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.view.LayoutInflater
 import android.view.View
 import android.widget.Button
@@ -21,6 +22,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -39,6 +41,7 @@ import eu.linkzhe.shortdownloader.model.DownloadFormat
 import eu.linkzhe.shortdownloader.model.DownloadedVideo
 import eu.linkzhe.shortdownloader.model.PreparedDownload
 import eu.linkzhe.shortdownloader.model.VideoInfo
+import eu.linkzhe.shortdownloader.util.StoragePermissionHelper
 import eu.linkzhe.shortdownloader.util.TimeFormat
 import eu.linkzhe.shortdownloader.util.UrlParser
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +98,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private var activeFormatAutoReprepared = false
     private var isDownloadPanelExpanded = true
     private var pendingCsvExport = false
+    private var pendingCsvAfterPermission = false
+    private var hasCsvError = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -152,7 +157,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val home = LayoutInflater.from(this).inflate(R.layout.screen_home, screenContainer, false)
         screenContainer.addView(home)
         home.findViewById<Button>(R.id.newDownloadButton).setOnClickListener { showDownloader() }
-        home.findViewById<Button>(R.id.exportCsvButton).setOnClickListener { safeExportCsv() }
+        home.findViewById<Button>(R.id.exportCsvButton).setOnClickListener { exportCsvFromHome() }
+        home.findViewById<Button>(R.id.fixCsvPermissionButton).setOnClickListener { fixCsvPermission() }
         renderHome(home)
     }
 
@@ -197,8 +203,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val downloads = historyStore.getDownloads()
         val downloadsContainer = root.findViewById<LinearLayout>(R.id.recentDownloadsContainer)
         val downloadsEmptyText = root.findViewById<TextView>(R.id.downloadsEmptyText)
+        val fixCsvPermissionButton = root.findViewById<Button>(R.id.fixCsvPermissionButton)
         downloadsContainer.removeAllViews()
         downloadsEmptyText.visibility = if (downloads.isEmpty()) View.VISIBLE else View.GONE
+        fixCsvPermissionButton.visibility = if (hasCsvError) View.VISIBLE else View.GONE
         downloads.forEach { download ->
             val item = LayoutInflater.from(this).inflate(R.layout.item_downloaded_video, downloadsContainer, false)
             item.findViewById<TextView>(R.id.downloadedTitle).text = download.title
@@ -492,7 +500,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         historyStore.addDownload(download)
         val savedDownloads = historyStore.getDownloads()
         runCatching { csvExportManager.appendOrCreate(download, savedDownloads) }
-            .onFailure { Toast.makeText(this, "CSV otomatis gagal dibuat: ${it.message.orEmpty()}", Toast.LENGTH_LONG).show() }
+            .onFailure {
+                hasCsvError = true
+                Toast.makeText(
+                    this,
+                    "Video tersimpan, tapi CSV gagal dibuat. Tap Export CSV dan izinkan storage.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         if (currentScreen == ScreenState.HOME) showHome()
     }
 
@@ -503,38 +518,92 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         downloadPanelToggle.contentDescription = if (expanded) "Collapse download panel" else "Expand download panel"
     }
 
-    private fun safeExportCsv() {
-        runCatching { exportCsvFromHome() }
-            .onFailure { Toast.makeText(this, "Gagal export CSV: ${it.message.orEmpty()}", Toast.LENGTH_LONG).show() }
-    }
-
     private fun exportCsvFromHome() {
         val downloads = historyStore.getDownloads()
+
         if (downloads.isEmpty()) {
-            Toast.makeText(this, "Belum ada video yang didownload. Download video dulu untuk membuat CSV.", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                this,
+                "Belum ada video yang didownload. CSV akan dibuat otomatis setelah download pertama.",
+                Toast.LENGTH_LONG
+            ).show()
             return
         }
-        ensureStorageThenExportCsv(downloads)
-    }
 
-    private fun ensureStorageThenExportCsv(downloads: List<DownloadedVideo>) {
-        if (!hasLegacyWritePermission()) {
+        if (StoragePermissionHelper.needsLegacyWritePermission(this)) {
             pendingCsvExport = true
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_WRITE_STORAGE)
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                REQUEST_WRITE_STORAGE
+            )
             return
         }
-        runCatching { exportCsv(downloads) }
-            .onFailure { Toast.makeText(this, "Gagal export CSV: ${it.message.orEmpty()}", Toast.LENGTH_LONG).show() }
+
+        safeExportCsv()
     }
 
-    private fun exportCsv(downloads: List<DownloadedVideo>) {
-        val savedFiles = csvExportManager.exportAll(downloads)
-        if (savedFiles.isEmpty()) {
-            Toast.makeText(this, "Belum ada video yang didownload. Download video dulu untuk membuat CSV.", Toast.LENGTH_LONG).show()
-            return
+    private fun safeExportCsv() {
+        runCatching {
+            val exported = csvExportManager.exportAll(historyStore.getDownloads())
+            if (exported.isEmpty()) {
+                Toast.makeText(this, "Belum ada data CSV.", Toast.LENGTH_LONG).show()
+            } else {
+                hasCsvError = false
+                Toast.makeText(
+                    this,
+                    "CSV saved to Movies/ZaVideoDownloader/csv",
+                    Toast.LENGTH_LONG
+                ).show()
+                if (currentScreen == ScreenState.HOME) showHome()
+            }
+        }.onFailure { error ->
+            handleCsvError(error)
         }
-        val names = savedFiles.joinToString(", ") { it.displayName }
-        Toast.makeText(this, "CSV exported to Movies/ZaVideoDownloader/csv: $names", Toast.LENGTH_LONG).show()
+    }
+
+    private fun handleCsvError(error: Throwable) {
+        hasCsvError = true
+        if (currentScreen == ScreenState.HOME) showHome()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            !StoragePermissionHelper.hasAllFilesAccess()
+        ) {
+            AlertDialog.Builder(this)
+                .setTitle("Storage permission needed")
+                .setMessage(
+                    "CSV gagal dibuat di folder Movies. Izinkan akses file agar aplikasi bisa menyimpan CSV ke Movies/ZaVideoDownloader/csv.\n\nDetail: ${error.message.orEmpty()}"
+                )
+                .setPositiveButton("Izinkan") { _, _ ->
+                    pendingCsvAfterPermission = true
+                    StoragePermissionHelper.openAllFilesAccessSettings(this)
+                }
+                .setNegativeButton("Nanti", null)
+                .show()
+        } else {
+            Toast.makeText(
+                this,
+                "Gagal membuat CSV: ${error.message.orEmpty()}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    private fun fixCsvPermission() {
+        when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> {
+                pendingCsvAfterPermission = true
+                StoragePermissionHelper.openAllFilesAccessSettings(this)
+            }
+            StoragePermissionHelper.needsLegacyWritePermission(this) -> {
+                pendingCsvExport = true
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                    REQUEST_WRITE_STORAGE
+                )
+            }
+            else -> safeExportCsv()
+        }
     }
 
     private fun setFormatButtonsEnabled(enabled: Boolean) {
@@ -590,7 +659,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private fun openCsvForDownload(download: DownloadedVideo) {
         val saved = runCatching { csvExportManager.exportChannel(download.channel, historyStore.getDownloads()) }
             .getOrElse {
-                Toast.makeText(this, "Unable to create CSV", Toast.LENGTH_SHORT).show()
+                handleCsvError(it)
                 return
             }
         openUri(saved.uri.toString(), "text/csv", "Open CSV", "Unable to open this CSV")
@@ -612,20 +681,54 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show()
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_WRITE_STORAGE && pendingCsvExport) {
-            pendingCsvExport = false
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-                exportCsvFromHome()
+    override fun onResume() {
+        super.onResume()
+
+        if (pendingCsvAfterPermission) {
+            pendingCsvAfterPermission = false
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                Environment.isExternalStorageManager()
+            ) {
+                safeExportCsv()
             } else {
-                Toast.makeText(this, "Storage permission dibutuhkan untuk export CSV.", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this,
+                    "Permission storage belum diizinkan.",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
-    private fun hasLegacyWritePermission(): Boolean = Build.VERSION.SDK_INT > Build.VERSION_CODES.P ||
-        ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
+        if (requestCode == REQUEST_WRITE_STORAGE) {
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+
+            if (granted) {
+                if (pendingCsvExport) {
+                    pendingCsvExport = false
+                    safeExportCsv()
+                }
+            } else {
+                pendingCsvExport = false
+                Toast.makeText(
+                    this,
+                    "Storage permission dibutuhkan untuk export CSV.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    private fun hasLegacyWritePermission(): Boolean = !StoragePermissionHelper.needsLegacyWritePermission(this)
 
     private fun loadThumbnail(url: String?) {
         thumbnailView?.setImageResource(R.drawable.ic_video)
