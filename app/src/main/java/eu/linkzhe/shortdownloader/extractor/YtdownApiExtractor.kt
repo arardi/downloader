@@ -62,7 +62,7 @@ class YtdownApiExtractor : VideoExtractor {
             }
             if (attempt < PREPARE_ATTEMPTS) delay(prepareDelayMs(attempt))
         }
-        throw IllegalStateException("File is still being prepared. Please try again.")
+        throw IllegalStateException("Final URL is not ready. Please try again.")
     }
 
     private fun warmupSession() {
@@ -149,15 +149,21 @@ class YtdownApiExtractor : VideoExtractor {
             ?: firstItem?.optCleanString("mediaThumbnail")
             ?: api.optCleanString("previewUrl")
 
+        val title = api.optCleanString("title") ?: "Untitled video"
+        val description = api.optCleanString("description")
+        val tags = api.optTags() ?: extractHashtags(title, description)
+
         return VideoInfo(
             videoId = api.optCleanString("id") ?: fallbackVideoId,
-            title = api.optCleanString("title") ?: "Untitled video",
+            title = title,
             channel = userInfo?.optCleanString("name"),
             username = userInfo?.optCleanString("username"),
             durationSeconds = durationText?.toDurationSeconds(),
             durationText = durationText,
             thumbnailUrl = thumbnailUrl,
             viewsText = stats?.optCleanString("viewsCount"),
+            description = description,
+            tags = tags,
             apiStatus = status,
             originalUrl = originalUrl,
             formats = formats
@@ -167,7 +173,7 @@ class YtdownApiExtractor : VideoExtractor {
     private fun parsePreparedDownload(api: JSONObject, format: DownloadFormat): PreparedDownload {
         val fileUrl = api.optCleanString("fileUrl")
             ?: throw IllegalStateException("API did not return final file URL")
-        val fallbackName = "ZaShorts-${FileNameSanitizer.sanitize(format.quality ?: format.resolution ?: format.id)}.mp4"
+        val fallbackName = "ZaVideo-${FileNameSanitizer.sanitize(format.quality ?: format.resolution ?: format.id)}.mp4"
         return PreparedDownload(
             fileName = api.optCleanString("fileName") ?: fallbackName,
             fileUrl = fileUrl,
@@ -195,6 +201,18 @@ class YtdownApiExtractor : VideoExtractor {
     private fun String.firstNumber(): Int? = Regex("\\d+").find(this)?.value?.toIntOrNull()
 
     private fun JSONObject.optCleanString(name: String): String? = optString(name).trim().takeIf { it.isNotEmpty() && it != "null" }
+
+    private fun JSONObject.optTags(): String? {
+        val array = optJSONArray("tags")
+        if (array != null) {
+            return buildList {
+                for (index in 0 until array.length()) {
+                    array.optString(index).trim().takeIf { it.isNotEmpty() && it != "null" }?.let { add(it) }
+                }
+            }.joinToString(", ").takeIf { it.isNotBlank() }
+        }
+        return optCleanString("tags")
+    }
 
     private fun JSONObject.optLongOrNull(name: String): Long? = if (has(name) && !isNull(name)) optLong(name).takeIf { it > 0L } else null
 
@@ -227,6 +245,7 @@ class YtdownApiExtractor : VideoExtractor {
         private const val API_URL = "https://app.ytdown.to/proxy.php"
         private const val WARMUP_URL = "https://app.ytdown.to/en27/"
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-        private const val PREPARE_ATTEMPTS = 10
+        private const val PREPARE_ATTEMPTS = 8
+        private val HASHTAG_REGEX = Regex("#[A-Za-z0-9_]+")
     }
 }

@@ -1,6 +1,7 @@
 package eu.linkzhe.shortdownloader
 
 import android.Manifest
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -12,21 +13,30 @@ import android.view.LayoutInflater
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import eu.linkzhe.shortdownloader.data.CsvExportManager
+import eu.linkzhe.shortdownloader.data.DownloadHistoryStore
 import eu.linkzhe.shortdownloader.download.DownloadManager
 import eu.linkzhe.shortdownloader.download.DownloadWorker
 import eu.linkzhe.shortdownloader.extractor.VideoExtractor
 import eu.linkzhe.shortdownloader.extractor.YtdownApiExtractor
+import eu.linkzhe.shortdownloader.model.AnalyzedUrl
 import eu.linkzhe.shortdownloader.model.DownloadFormat
+import eu.linkzhe.shortdownloader.model.DownloadedVideo
 import eu.linkzhe.shortdownloader.model.PreparedDownload
 import eu.linkzhe.shortdownloader.model.VideoInfo
 import eu.linkzhe.shortdownloader.util.TimeFormat
@@ -36,136 +46,245 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private val extractor: VideoExtractor = YtdownApiExtractor()
     private val imageClient = OkHttpClient()
     private lateinit var downloadManager: DownloadManager
+    private lateinit var historyStore: DownloadHistoryStore
+    private lateinit var csvExportManager: CsvExportManager
 
-    private lateinit var urlInput: EditText
-    private lateinit var loadingContainer: View
-    private lateinit var loadingText: TextView
-    private lateinit var statusText: TextView
-    private lateinit var detailCard: View
-    private lateinit var thumbnailView: ImageView
-    private lateinit var titleText: TextView
-    private lateinit var channelText: TextView
-    private lateinit var durationText: TextView
-    private lateinit var viewsText: TextView
-    private lateinit var videoIdText: TextView
-    private lateinit var formatSection: View
-    private lateinit var formatsContainer: LinearLayout
-    private lateinit var downloadCard: View
-    private lateinit var downloadFileText: TextView
+    private lateinit var screenContainer: FrameLayout
+    private lateinit var downloadBottomSheet: View
+    private lateinit var downloadPanelTitle: TextView
+    private lateinit var downloadPanelPercent: TextView
+    private lateinit var downloadPanelToggle: ImageButton
+    private lateinit var downloadPanelContent: View
     private lateinit var downloadStatusText: TextView
-    private lateinit var downloadSizeText: TextView
+    private lateinit var downloadFileText: TextView
     private lateinit var downloadProgress: ProgressBar
-    private lateinit var downloadPercentText: TextView
     private lateinit var openFileButton: Button
+    private lateinit var retryButton: Button
+
+    private var urlInput: EditText? = null
+    private var loadingContainer: View? = null
+    private var loadingText: TextView? = null
+    private var statusText: TextView? = null
+    private var detailCard: View? = null
+    private var thumbnailView: ImageView? = null
+    private var titleText: TextView? = null
+    private var channelText: TextView? = null
+    private var durationText: TextView? = null
+    private var viewsText: TextView? = null
+    private var videoIdText: TextView? = null
+    private var formatSection: View? = null
+    private var formatsContainer: LinearLayout? = null
 
     private val formatButtons = mutableListOf<Button>()
+    private var currentScreen = ScreenState.HOME
+    private var lastBackPressedTime = 0L
     private var currentVideoInfo: VideoInfo? = null
     private var completedUri: Uri? = null
     private var activeFormat: DownloadFormat? = null
+    private var lastSelectedFormat: DownloadFormat? = null
     private var activeFormatAutoReprepared = false
+    private var isDownloadPanelExpanded = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        window.statusBarColor = ContextCompat.getColor(this, R.color.app_background)
+        window.navigationBarColor = ContextCompat.getColor(this, R.color.app_background)
         downloadManager = DownloadManager(applicationContext)
-        bindViews()
-        bindActions()
+        historyStore = DownloadHistoryStore(applicationContext)
+        csvExportManager = CsvExportManager(applicationContext)
+        bindRootViews()
+        bindBackNavigation()
+        showHome()
     }
 
-    private fun bindViews() {
-        urlInput = findViewById(R.id.urlInput)
-        loadingContainer = findViewById(R.id.loadingContainer)
-        loadingText = findViewById(R.id.loadingText)
-        statusText = findViewById(R.id.statusText)
-        detailCard = findViewById(R.id.detailCard)
-        thumbnailView = findViewById(R.id.thumbnailView)
-        titleText = findViewById(R.id.titleText)
-        channelText = findViewById(R.id.channelText)
-        durationText = findViewById(R.id.durationText)
-        viewsText = findViewById(R.id.viewsText)
-        videoIdText = findViewById(R.id.videoIdText)
-        formatSection = findViewById(R.id.formatSection)
-        formatsContainer = findViewById(R.id.formatsContainer)
-        downloadCard = findViewById(R.id.downloadCard)
-        downloadFileText = findViewById(R.id.downloadFileText)
+    private fun bindRootViews() {
+        screenContainer = findViewById(R.id.screenContainer)
+        downloadBottomSheet = findViewById(R.id.downloadBottomSheet)
+        downloadPanelTitle = findViewById(R.id.downloadPanelTitle)
+        downloadPanelPercent = findViewById(R.id.downloadPanelPercent)
+        downloadPanelToggle = findViewById(R.id.downloadPanelToggle)
+        downloadPanelContent = findViewById(R.id.downloadPanelContent)
         downloadStatusText = findViewById(R.id.downloadStatusText)
-        downloadSizeText = findViewById(R.id.downloadSizeText)
+        downloadFileText = findViewById(R.id.downloadFileText)
         downloadProgress = findViewById(R.id.downloadProgress)
-        downloadPercentText = findViewById(R.id.downloadPercentText)
         openFileButton = findViewById(R.id.openFileButton)
+        retryButton = findViewById(R.id.retryButton)
+        downloadPanelToggle.setOnClickListener { setDownloadPanelExpanded(!isDownloadPanelExpanded) }
+        openFileButton.setOnClickListener { openCompletedFile() }
+        retryButton.setOnClickListener { lastSelectedFormat?.let { startDownload(it) } }
     }
 
-    private fun bindActions() {
-        findViewById<Button>(R.id.pasteButton).setOnClickListener { pasteFromClipboard() }
-        findViewById<Button>(R.id.clearButton).setOnClickListener { clearInput() }
-        findViewById<Button>(R.id.analyzeButton).setOnClickListener { analyzeUrl() }
-        findViewById<Button>(R.id.refreshButton).setOnClickListener { analyzeUrl() }
-        openFileButton.setOnClickListener {
-            if (completedUri != null) {
-                openCompletedFile()
-            } else {
-                activeFormat?.let { startDownload(it) }
+    private fun bindBackNavigation() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (currentScreen != ScreenState.HOME) {
+                    showHome()
+                    return
+                }
+                val now = System.currentTimeMillis()
+                if (now - lastBackPressedTime <= EXIT_BACK_WINDOW_MS) {
+                    finish()
+                } else {
+                    lastBackPressedTime = now
+                    Toast.makeText(this@MainActivity, "Tekan sekali lagi untuk keluar", Toast.LENGTH_SHORT).show()
+                }
             }
+        })
+    }
+
+    private fun showHome() {
+        currentScreen = ScreenState.HOME
+        screenContainer.removeAllViews()
+        val home = LayoutInflater.from(this).inflate(R.layout.screen_home, screenContainer, false)
+        screenContainer.addView(home)
+        home.findViewById<Button>(R.id.newDownloadButton).setOnClickListener { showDownloader() }
+        home.findViewById<Button>(R.id.exportCsvButton).setOnClickListener { exportCsv() }
+        renderHome(home)
+    }
+
+    private fun showDownloader(prefillUrl: String? = null, autoAnalyze: Boolean = false) {
+        currentScreen = ScreenState.DOWNLOADER
+        screenContainer.removeAllViews()
+        val downloader = LayoutInflater.from(this).inflate(R.layout.screen_downloader, screenContainer, false)
+        screenContainer.addView(downloader)
+        bindDownloaderViews(downloader)
+        bindDownloaderActions(downloader)
+        if (!prefillUrl.isNullOrBlank()) {
+            urlInput?.setText(prefillUrl)
+            if (autoAnalyze) analyzeUrl()
         }
+    }
+
+    private fun bindDownloaderViews(root: View) {
+        urlInput = root.findViewById(R.id.urlInput)
+        loadingContainer = root.findViewById(R.id.loadingContainer)
+        loadingText = root.findViewById(R.id.loadingText)
+        statusText = root.findViewById(R.id.statusText)
+        detailCard = root.findViewById(R.id.detailCard)
+        thumbnailView = root.findViewById(R.id.thumbnailView)
+        titleText = root.findViewById(R.id.titleText)
+        channelText = root.findViewById(R.id.channelText)
+        durationText = root.findViewById(R.id.durationText)
+        viewsText = root.findViewById(R.id.viewsText)
+        videoIdText = root.findViewById(R.id.videoIdText)
+        formatSection = root.findViewById(R.id.formatSection)
+        formatsContainer = root.findViewById(R.id.formatsContainer)
+    }
+
+    private fun bindDownloaderActions(root: View) {
+        root.findViewById<ImageButton>(R.id.backHomeButton).setOnClickListener { showHome() }
+        root.findViewById<Button>(R.id.pasteButton).setOnClickListener { pasteFromClipboard() }
+        root.findViewById<Button>(R.id.clearButton).setOnClickListener { clearInput() }
+        root.findViewById<Button>(R.id.analyzeButton).setOnClickListener { analyzeUrl() }
+        root.findViewById<Button>(R.id.refreshButton).setOnClickListener { analyzeUrl() }
+    }
+
+    private fun renderHome(root: View) {
+        val downloads = historyStore.getDownloads()
+        val downloadsContainer = root.findViewById<LinearLayout>(R.id.recentDownloadsContainer)
+        val downloadsEmptyText = root.findViewById<TextView>(R.id.downloadsEmptyText)
+        downloadsContainer.removeAllViews()
+        downloadsEmptyText.visibility = if (downloads.isEmpty()) View.VISIBLE else View.GONE
+        downloads.forEach { download ->
+            val item = LayoutInflater.from(this).inflate(R.layout.item_downloaded_video, downloadsContainer, false)
+            item.findViewById<TextView>(R.id.downloadedTitle).text = download.title
+            item.findViewById<TextView>(R.id.downloadedMeta).text = listOfNotNull(
+                download.quality,
+                download.fileSizeText,
+                formatDate(download.downloadedAt)
+            ).joinToString(" • ")
+            item.findViewById<TextView>(R.id.downloadedPath).text = download.filePathOrUri
+            item.findViewById<Button>(R.id.openDownloadedButton).setOnClickListener { openUri(download.filePathOrUri) }
+            item.findViewById<Button>(R.id.copyPathButton).setOnClickListener { copyToClipboard("Video path", download.filePathOrUri) }
+            downloadsContainer.addView(item)
+        }
+
+        val urls = historyStore.getRecentUrls()
+        val urlsContainer = root.findViewById<LinearLayout>(R.id.recentUrlsContainer)
+        val urlsEmptyText = root.findViewById<TextView>(R.id.recentUrlsEmptyText)
+        urlsContainer.removeAllViews()
+        urlsEmptyText.visibility = if (urls.isEmpty()) View.VISIBLE else View.GONE
+        urls.forEach { recentUrl ->
+            val item = LayoutInflater.from(this).inflate(R.layout.item_recent_url, urlsContainer, false)
+            bindRecentUrlItem(item, recentUrl)
+            urlsContainer.addView(item)
+        }
+    }
+
+    private fun bindRecentUrlItem(item: View, recentUrl: AnalyzedUrl) {
+        item.findViewById<TextView>(R.id.recentUrlTitle).text = recentUrl.title.ifBlank { recentUrl.videoId }
+        item.findViewById<TextView>(R.id.recentUrlText).text = recentUrl.url
+        item.findViewById<TextView>(R.id.recentUrlDate).text = formatDate(recentUrl.analyzedAt)
+        val reAnalyze = { showDownloader(recentUrl.url, autoAnalyze = true) }
+        item.setOnClickListener { reAnalyze() }
+        item.findViewById<Button>(R.id.reAnalyzeButton).setOnClickListener { reAnalyze() }
     }
 
     private fun pasteFromClipboard() {
         val clipboard = ContextCompat.getSystemService(this, ClipboardManager::class.java)
         val text = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
-        if (text.isNotBlank()) urlInput.setText(text)
+        if (text.isNotBlank()) urlInput?.setText(text)
     }
 
     private fun clearInput() {
-        urlInput.setText("")
-        statusText.visibility = View.GONE
-        detailCard.visibility = View.GONE
-        formatSection.visibility = View.GONE
-        downloadCard.visibility = View.GONE
+        urlInput?.setText("")
+        statusText?.visibility = View.GONE
+        detailCard?.visibility = View.GONE
+        formatSection?.visibility = View.GONE
         completedUri = null
         activeFormat = null
+        lastSelectedFormat = null
         activeFormatAutoReprepared = false
+        currentVideoInfo = null
         formatButtons.clear()
     }
 
     private fun analyzeUrl() {
-        val input = urlInput.text.toString()
+        val input = urlInput?.text?.toString().orEmpty()
         val videoId = UrlParser.extractVideoId(input)
         if (videoId == null) {
-            showError("Invalid URL. Use a YouTube Shorts, youtu.be, or watch URL with an 11-character video ID.")
+            showError("Invalid URL. Use a YouTube video URL, youtu.be link, or watch URL with an 11-character video ID.")
             return
         }
 
-        loadingText.text = "Analyzing video..."
-        loadingContainer.visibility = View.VISIBLE
-        statusText.visibility = View.GONE
+        loadingText?.text = "Analyzing video..."
+        loadingContainer?.visibility = View.VISIBLE
+        statusText?.visibility = View.GONE
         lifecycleScope.launch {
             val result = runCatching { extractor.fetchInfo(input) }
-            loadingContainer.visibility = View.GONE
-            result.onSuccess { renderVideoInfo(it) }
-                .onFailure { showError("Unable to analyze this video. ${it.message.orEmpty()}".trim()) }
+            loadingContainer?.visibility = View.GONE
+            result.onSuccess {
+                historyStore.addRecentUrl(input, it.title, it.videoId)
+                renderVideoInfo(it)
+            }.onFailure { showError("Unable to analyze this video. ${it.message.orEmpty()}".trim()) }
         }
     }
 
     private fun renderVideoInfo(videoInfo: VideoInfo) {
         currentVideoInfo = videoInfo
-        detailCard.visibility = View.VISIBLE
-        titleText.text = videoInfo.title
-        channelText.text = listOfNotNull(videoInfo.channel ?: "Unknown channel", videoInfo.username?.let { "@$it" }).joinToString(" • ")
-        durationText.text = videoInfo.durationText ?: TimeFormat.duration(videoInfo.durationSeconds)
-        viewsText.text = videoInfo.viewsText ?: "Views unknown"
-        videoIdText.text = videoInfo.videoId.take(6)
-        showInfo("API status: ${videoInfo.apiStatus ?: "ok"}")
+        detailCard?.visibility = View.VISIBLE
+        titleText?.text = videoInfo.title
+        channelText?.text = listOfNotNull(videoInfo.channel ?: "Unknown channel", videoInfo.username?.let { "@$it" }).joinToString(" • ")
+        durationText?.text = videoInfo.durationText ?: TimeFormat.duration(videoInfo.durationSeconds)
+        viewsText?.text = videoInfo.viewsText ?: "Views unknown"
+        videoIdText?.text = videoInfo.videoId.take(6)
+        showInfo("Ready: choose a quality to download")
         loadThumbnail(videoInfo.thumbnailUrl)
         renderFormats(videoInfo)
     }
 
     private fun renderFormats(videoInfo: VideoInfo) {
-        formatSection.visibility = View.VISIBLE
-        formatsContainer.removeAllViews()
+        formatSection?.visibility = View.VISIBLE
+        formatsContainer?.removeAllViews()
         formatButtons.clear()
 
         val mp4Formats: List<DownloadFormat> = videoInfo.formats
@@ -182,21 +301,21 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 textSize = 14f
                 setPadding(0, 14, 0, 0)
             }
-            formatsContainer.addView(empty)
+            formatsContainer?.addView(empty)
             return
         }
 
         mp4Formats.forEach { format: DownloadFormat ->
             val item = LayoutInflater.from(this).inflate(R.layout.item_format, formatsContainer, false)
-
             item.findViewById<TextView>(R.id.qualityBadge).text = format.qualityBadge()
             item.findViewById<TextView>(R.id.formatLabel).text = format.displayTitle()
             item.findViewById<TextView>(R.id.formatMeta).text = listOfNotNull(
+                format.resolution,
                 format.extension.uppercase(),
                 format.fileSizeText
             ).joinToString(" • ")
             item.findViewById<TextView>(R.id.taskBadge).apply {
-                text = "Prepared by API"
+                text = "API ready"
                 visibility = View.VISIBLE
             }
 
@@ -204,9 +323,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             downloadButton.isEnabled = true
             downloadButton.alpha = 1f
             downloadButton.setOnClickListener { startDownload(format) }
-
             formatButtons.add(downloadButton)
-            formatsContainer.addView(item)
+            formatsContainer?.addView(item)
         }
     }
 
@@ -218,6 +336,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         }
 
         activeFormat = format
+        lastSelectedFormat = format
         activeFormatAutoReprepared = false
         prepareAndStartDownload(format)
     }
@@ -225,22 +344,24 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private fun prepareAndStartDownload(format: DownloadFormat) {
         setFormatButtonsEnabled(false)
         completedUri = null
-        downloadCard.visibility = View.VISIBLE
+        downloadBottomSheet.visibility = View.VISIBLE
+        setDownloadPanelExpanded(true)
         openFileButton.visibility = View.GONE
+        retryButton.visibility = View.GONE
         downloadProgress.isIndeterminate = true
         downloadProgress.progress = 5
-        downloadFileText.text = "Preparing ${format.qualityBadge()}..."
-        downloadStatusText.text = "Waiting for final file URL..."
-        downloadSizeText.text = format.fileSizeText?.let { "Estimated size: $it" } ?: "Preparing selected quality"
-        downloadPercentText.text = "5%"
-        showInfo("Preparing selected quality...")
+        downloadPanelTitle.text = "Preparing..."
+        downloadFileText.text = "Preparing ${format.qualityBadge()}"
+        downloadStatusText.text = format.fileSizeText?.let { "Estimated size: $it" } ?: "Waiting for final file URL"
+        downloadPanelPercent.text = "5%"
+        statusText?.visibility = View.GONE
 
         lifecycleScope.launch {
             val preparedResult = runCatching {
                 extractor.prepareDownload(format) { message ->
                     runOnUiThread {
-                        downloadStatusText.text = message
-                        statusText.text = message
+                        downloadPanelTitle.text = message
+                        downloadStatusText.text = "Preparing final file URL"
                     }
                 }
             }
@@ -249,28 +370,32 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             }.onFailure {
                 setFormatButtonsEnabled(true)
                 downloadProgress.isIndeterminate = false
-                downloadStatusText.text = "Preparation failed"
-                downloadFileText.text = "Download failed"
-                downloadSizeText.text = it.message ?: "File is still being prepared. Please try again."
-                openFileButton.text = "Retry"
-                openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_retry, 0, 0, 0)
-                openFileButton.visibility = View.VISIBLE
+                downloadPanelTitle.text = "Download failed"
+                downloadFileText.text = "Preparation failed"
+                downloadStatusText.text = it.message ?: "Final URL is not ready. Please try again."
+                retryButton.visibility = View.VISIBLE
+                openFileButton.visibility = View.GONE
                 showError("Could not prepare this quality. ${it.message.orEmpty()}".trim())
             }
         }
     }
 
     private fun beginPreparedDownload(prepared: PreparedDownload) {
-        showInfo("Final URL ready. Downloading...")
+        statusText?.visibility = View.GONE
         downloadProgress.isIndeterminate = false
         downloadProgress.progress = 0
-        downloadStatusText.text = "Downloading..."
+        retryButton.visibility = View.GONE
+        openFileButton.visibility = View.GONE
+        downloadPanelTitle.text = "Downloading..."
         downloadFileText.text = prepared.fileName
-        downloadSizeText.text = prepared.fileSizeText?.let { "File size: $it" } ?: "Saving to Movies/ZaShortsDownloader"
-        downloadPercentText.text = "0%"
+        downloadStatusText.text = prepared.fileSizeText?.let { "File size: $it" } ?: "Saving to Movies/ZaVideoDownloader"
+        downloadPanelPercent.text = "0%"
         val request = runCatching { downloadManager.download(prepared) }
             .getOrElse {
                 setFormatButtonsEnabled(true)
+                downloadPanelTitle.text = "Download failed"
+                downloadStatusText.text = it.message ?: getString(R.string.no_downloadable_format)
+                retryButton.visibility = View.VISIBLE
                 showError(it.message ?: getString(R.string.no_downloadable_format))
                 return
             }
@@ -296,22 +421,24 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         downloadProgress.isIndeterminate = false
         downloadProgress.progress = progress
         downloadFileText.text = fileName.ifBlank { "Download" }
+        downloadPanelTitle.text = if (info.state == WorkInfo.State.SUCCEEDED) "Download completed" else status
         downloadStatusText.text = if (speed > 0 && info.state == WorkInfo.State.RUNNING) {
-            "$status • ${TimeFormat.bytes(speed)}/s"
+            "${TimeFormat.bytes(speed)}/s • Movies/ZaVideoDownloader"
         } else {
-            error ?: status
+            error ?: "Movies/ZaVideoDownloader"
         }
-        downloadPercentText.text = "$progress%"
+        downloadPanelPercent.text = "$progress%"
 
         if (info.state == WorkInfo.State.SUCCEEDED && !outputUri.isNullOrBlank()) {
+            val wasAlreadyCompleted = completedUri != null
             completedUri = Uri.parse(outputUri)
-            downloadFileText.text = "Download completed"
-            downloadStatusText.text = "Saved to Movies/ZaShortsDownloader"
-            downloadSizeText.text = fileName
-            openFileButton.text = "Open file"
-            openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_open, 0, 0, 0)
+            downloadFileText.text = fileName.ifBlank { "Download completed" }
+            downloadPanelTitle.text = "Download completed"
+            downloadStatusText.text = "Saved to Movies/ZaVideoDownloader"
+            retryButton.visibility = View.GONE
             openFileButton.visibility = View.VISIBLE
             setFormatButtonsEnabled(true)
+            if (!wasAlreadyCompleted) recordCompletedDownload(outputUri, fileName)
         } else if (info.state == WorkInfo.State.FAILED) {
             val message = error ?: "Download failed"
             if (shouldAutoReprepare(message)) {
@@ -319,12 +446,45 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 return
             }
             downloadFileText.text = "Download failed"
+            downloadPanelTitle.text = "Download failed"
             downloadStatusText.text = message
-            openFileButton.text = "Retry"
-            openFileButton.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_retry, 0, 0, 0)
-            openFileButton.visibility = View.VISIBLE
+            retryButton.visibility = View.VISIBLE
+            openFileButton.visibility = View.GONE
             setFormatButtonsEnabled(true)
         }
+    }
+
+    private fun recordCompletedDownload(outputUri: String, fileName: String) {
+        val videoInfo = currentVideoInfo
+        val format = lastSelectedFormat
+        val download = DownloadedVideo(
+            id = System.currentTimeMillis(),
+            title = videoInfo?.title ?: fileName.ifBlank { "Downloaded video" },
+            originalUrl = videoInfo?.originalUrl ?: urlInput?.text?.toString().orEmpty(),
+            videoId = videoInfo?.videoId.orEmpty(),
+            channel = videoInfo?.channel,
+            description = videoInfo?.description,
+            tags = videoInfo?.tags,
+            quality = format?.qualityBadge(),
+            fileSizeText = format?.fileSizeText,
+            filePathOrUri = outputUri,
+            downloadedAt = System.currentTimeMillis()
+        )
+        historyStore.addDownload(download)
+        runCatching { csvExportManager.appendDownload(download) }
+        if (currentScreen == ScreenState.HOME) showHome()
+    }
+
+    private fun setDownloadPanelExpanded(expanded: Boolean) {
+        isDownloadPanelExpanded = expanded
+        downloadPanelContent.visibility = if (expanded) View.VISIBLE else View.GONE
+        downloadPanelToggle.setImageResource(if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_up)
+        downloadPanelToggle.contentDescription = if (expanded) "Collapse download panel" else "Expand download panel"
+    }
+
+    private fun exportCsv() {
+        val file = csvExportManager.exportAll(historyStore.getDownloads())
+        Toast.makeText(this, "CSV exported: ${file.absolutePath}", Toast.LENGTH_LONG).show()
     }
 
     private fun setFormatButtonsEnabled(enabled: Boolean) {
@@ -345,9 +505,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         activeFormatAutoReprepared = true
         downloadProgress.isIndeterminate = true
         downloadFileText.text = "Preparing again..."
-        downloadStatusText.text = "Final URL expired. Preparing again..."
-        downloadSizeText.text = "Refreshing the final file URL once"
-        showInfo("Final URL expired. Preparing again...")
+        downloadPanelTitle.text = "Preparing again..."
+        downloadStatusText.text = "Final URL expired. Refreshing token"
+        retryButton.visibility = View.GONE
+        statusText?.visibility = View.GONE
         prepareAndStartDownload(format)
     }
 
@@ -369,18 +530,30 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private fun openCompletedFile() {
         val uri = completedUri ?: return
+        openUri(uri.toString())
+    }
+
+    private fun openUri(value: String) {
+        val uri = Uri.parse(value)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(uri, "video/mp4")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        startActivity(Intent.createChooser(intent, "Open video"))
+        runCatching { startActivity(Intent.createChooser(intent, "Open video")) }
+            .onFailure { Toast.makeText(this, "Unable to open this video", Toast.LENGTH_SHORT).show() }
+    }
+
+    private fun copyToClipboard(label: String, value: String) {
+        val clipboard = ContextCompat.getSystemService(this, ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText(label, value))
+        Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
     }
 
     private fun hasLegacyWritePermission(): Boolean = Build.VERSION.SDK_INT > Build.VERSION_CODES.P ||
         ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
     private fun loadThumbnail(url: String?) {
-        thumbnailView.setImageResource(R.drawable.ic_video)
+        thumbnailView?.setImageResource(R.drawable.ic_video)
         if (url.isNullOrBlank()) return
         lifecycleScope.launch {
             val bitmap = withContext(Dispatchers.IO) {
@@ -391,25 +564,31 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                     }
                 }.getOrNull()
             }
-            if (bitmap != null) thumbnailView.setImageBitmap(bitmap)
+            if (bitmap != null) thumbnailView?.setImageBitmap(bitmap)
         }
     }
 
     private fun showInfo(message: String) {
-        statusText.text = message
-        statusText.setTextColor(ContextCompat.getColor(this, R.color.success))
-        statusText.setBackgroundResource(R.drawable.bg_status_success)
-        statusText.visibility = View.VISIBLE
+        statusText?.text = message
+        statusText?.setTextColor(ContextCompat.getColor(this, R.color.success))
+        statusText?.setBackgroundResource(R.drawable.bg_status_success)
+        statusText?.visibility = View.VISIBLE
     }
 
     private fun showError(message: String) {
-        statusText.text = message
-        statusText.setTextColor(ContextCompat.getColor(this, R.color.danger))
-        statusText.setBackgroundResource(R.drawable.bg_status_error)
-        statusText.visibility = View.VISIBLE
+        statusText?.text = message
+        statusText?.setTextColor(ContextCompat.getColor(this, R.color.danger))
+        statusText?.setBackgroundResource(R.drawable.bg_status_error)
+        statusText?.visibility = View.VISIBLE
     }
+
+    private fun formatDate(timestamp: Long): String = DATE_FORMAT.format(Date(timestamp))
+
+    private enum class ScreenState { HOME, DOWNLOADER }
 
     companion object {
         private const val REQUEST_WRITE_STORAGE = 28
+        private const val EXIT_BACK_WINDOW_MS = 2_000L
+        private val DATE_FORMAT = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.US)
     }
 }

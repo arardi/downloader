@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Za Shorts Downloader</string>
-    <string name="disclaimer">Only download videos you own or have permission to download. Downloads are provided through the configured API service.</string>
+    <string name="app_name">Za Video Downloader</string>
+    <string name="input_title">YouTube Video URL</string>
+    <string name="disclaimer">Only download videos you own or have permission to save.</string>
     <string name="unable_extract">Unable to extract video details. Please try another video or update the app.</string>
     <string name="no_downloadable_format">No downloadable format found.</string>
 </resources>
