@@ -6,5 +6,8 @@ import eu.linkzhe.shortdownloader.model.VideoInfo
 
 interface VideoExtractor {
     suspend fun fetchInfo(url: String): VideoInfo
-    suspend fun prepareDownload(format: DownloadFormat): PreparedDownload
+    suspend fun prepareDownload(
+        format: DownloadFormat,
+        onProgress: ((String) -> Unit)? = null
+    ): PreparedDownload
 }

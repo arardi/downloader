@@ -33,24 +33,36 @@ class YtdownApiExtractor : VideoExtractor {
         parseVideoInfo(postProxy(url), url, videoId)
     }
 
-    override suspend fun prepareDownload(format: DownloadFormat): PreparedDownload = withContext(Dispatchers.IO) {
+    override suspend fun prepareDownload(
+        format: DownloadFormat,
+        onProgress: ((String) -> Unit)?
+    ): PreparedDownload = withContext(Dispatchers.IO) {
         warmupSession()
         var lastProgress: String? = null
-        repeat(PREPARE_ATTEMPTS) { attempt ->
+        repeat(PREPARE_ATTEMPTS) { attemptIndex ->
+            val attempt = attemptIndex + 1
+            onProgress?.invoke("Preparing file... attempt $attempt/$PREPARE_ATTEMPTS")
             val api = postProxy(format.mediaUrl).optJSONObject("api")
                 ?: throw IllegalStateException("API response is missing download data")
             val status = api.optCleanString("status")
-            if (status.equals("completed", ignoreCase = true)) {
+            val fileUrl = api.optCleanString("fileUrl")
+            val apiProgress = api.optCleanString("progress") ?: api.optCleanString("percent")
+            lastProgress = apiProgress ?: status
+            if (!apiProgress.isNullOrBlank()) {
+                onProgress?.invoke(apiProgress)
+            }
+
+            if (status.equals("completed", ignoreCase = true) && !fileUrl.isNullOrBlank()) {
+                onProgress?.invoke("Final URL ready")
                 return@withContext parsePreparedDownload(api, format)
             }
 
-            lastProgress = api.optCleanString("progress") ?: api.optCleanString("percent") ?: status
-            if (!status.isProcessingStatus()) {
+            if (!status.isProcessingStatus() && !status.equals("completed", ignoreCase = true) && fileUrl.isNullOrBlank()) {
                 throw IllegalStateException(lastProgress ?: "Download preparation not completed")
             }
-            if (attempt < PREPARE_ATTEMPTS - 1) delay(PREPARE_RETRY_DELAY_MS)
+            if (attempt < PREPARE_ATTEMPTS) delay(prepareDelayMs(attempt))
         }
-        throw IllegalStateException("Video is still processing. Please try again.")
+        throw IllegalStateException("Final URL is not ready. Please try again.")
     }
 
     private fun warmupSession() {
@@ -171,7 +183,10 @@ class YtdownApiExtractor : VideoExtractor {
         ?: 0
 
     private fun String?.isProcessingStatus(): Boolean = this == null || equals("processing", ignoreCase = true) ||
-        equals("pending", ignoreCase = true) || equals("ok", ignoreCase = true) || equals("running", ignoreCase = true)
+        equals("pending", ignoreCase = true) || equals("queued", ignoreCase = true) ||
+        equals("ok", ignoreCase = true) || equals("running", ignoreCase = true)
+
+    private fun prepareDelayMs(attempt: Int): Long = if (attempt <= 3) 1_500L else 2_500L
 
     private fun String.firstNumber(): Int? = Regex("\\d+").find(this)?.value?.toIntOrNull()
 
@@ -208,7 +223,6 @@ class YtdownApiExtractor : VideoExtractor {
         private const val API_URL = "https://app.ytdown.to/proxy.php"
         private const val WARMUP_URL = "https://app.ytdown.to/en27/"
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-        private const val PREPARE_ATTEMPTS = 5
-        private const val PREPARE_RETRY_DELAY_MS = 2_000L
+        private const val PREPARE_ATTEMPTS = 8
     }
 }

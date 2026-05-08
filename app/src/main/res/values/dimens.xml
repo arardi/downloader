@@ -1,8 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <dimen name="screen_padding">16dp</dimen>
+    <dimen name="card_radius">24dp</dimen>
+    <dimen name="card_padding">18dp</dimen>
+    <dimen name="input_height">56dp</dimen>
+    <dimen name="button_height">52dp</dimen>
+    <dimen name="thumbnail_height">260dp</dimen>
+    <dimen name="quality_badge_width">58dp</dimen>
+    <dimen name="quality_badge_height">32dp</dimen>
+    <dimen name="download_panel_margin">12dp</dimen>
+    <dimen name="bottom_sheet_radius">24dp</dimen>
+    <dimen name="nav_safe_bottom_extra">24dp</dimen>
+    <dimen name="small_radius">14dp</dimen>
+    <dimen name="button_radius">18dp</dimen>
+    <dimen name="icon_size">22dp</dimen>
     <dimen name="space_xs">6dp</dimen>
     <dimen name="space_sm">10dp</dimen>
     <dimen name="space_md">16dp</dimen>
     <dimen name="space_lg">24dp</dimen>
-    <dimen name="card_radius">22dp</dimen>
 </resources>
