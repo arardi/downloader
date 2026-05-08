@@ -226,6 +226,18 @@ class YtdownApiExtractor : VideoExtractor {
         }
     }
 
+    private fun extractHashtags(title: String?, description: String?): String? {
+        val source = listOfNotNull(title, description).joinToString(" ")
+        if (source.isBlank()) return null
+
+        return HASHTAG_REGEX
+            .findAll(source)
+            .map { it.value }
+            .distinct()
+            .joinToString(", ")
+            .takeIf { it.isNotBlank() }
+    }
+
     private class SimpleMemoryCookieJar : CookieJar {
         private val cookies = ConcurrentHashMap<String, MutableList<Cookie>>()
 
