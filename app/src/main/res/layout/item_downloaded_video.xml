@@ -72,5 +72,19 @@
             android:textAllCaps="false"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/csvButton"
+            style="@style/Widget.AppCompat.Button.Borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:layout_marginStart="8dp"
+            android:drawableStart="@drawable/ic_file_csv"
+            android:drawablePadding="6dp"
+            android:minWidth="0dp"
+            android:text="CSV"
+            android:textAllCaps="false"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
     </LinearLayout>
 </LinearLayout>

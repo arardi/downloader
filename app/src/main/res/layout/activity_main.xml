@@ -64,6 +64,17 @@
                 android:contentDescription="Collapse download panel"
                 android:padding="8dp"
                 android:src="@drawable/ic_chevron_down" />
+
+            <ImageButton
+                android:id="@+id/downloadPanelClose"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="4dp"
+                android:background="@drawable/bg_icon_button"
+                android:contentDescription="@string/close"
+                android:padding="10dp"
+                android:src="@drawable/ic_close"
+                android:tint="@color/text_secondary" />
         </LinearLayout>
 
         <TextView

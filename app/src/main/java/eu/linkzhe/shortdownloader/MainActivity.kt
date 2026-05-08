@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private lateinit var downloadPanelTitle: TextView
     private lateinit var downloadPanelPercent: TextView
     private lateinit var downloadPanelToggle: ImageButton
+    private lateinit var downloadPanelClose: ImageButton
     private lateinit var downloadPanelContent: View
     private lateinit var downloadStatusText: TextView
     private lateinit var downloadFileText: TextView
@@ -88,10 +89,12 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private var lastBackPressedTime = 0L
     private var currentVideoInfo: VideoInfo? = null
     private var completedUri: Uri? = null
+    private var completedReadablePath: String? = null
     private var activeFormat: DownloadFormat? = null
     private var lastSelectedFormat: DownloadFormat? = null
     private var activeFormatAutoReprepared = false
     private var isDownloadPanelExpanded = true
+    private var pendingCsvExport = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -112,6 +115,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         downloadPanelTitle = findViewById(R.id.downloadPanelTitle)
         downloadPanelPercent = findViewById(R.id.downloadPanelPercent)
         downloadPanelToggle = findViewById(R.id.downloadPanelToggle)
+        downloadPanelClose = findViewById(R.id.downloadPanelClose)
         downloadPanelContent = findViewById(R.id.downloadPanelContent)
         downloadStatusText = findViewById(R.id.downloadStatusText)
         downloadFileText = findViewById(R.id.downloadFileText)
@@ -119,6 +123,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         openFileButton = findViewById(R.id.openFileButton)
         retryButton = findViewById(R.id.retryButton)
         downloadPanelToggle.setOnClickListener { setDownloadPanelExpanded(!isDownloadPanelExpanded) }
+        downloadPanelClose.setOnClickListener { downloadBottomSheet.visibility = View.GONE }
         openFileButton.setOnClickListener { openCompletedFile() }
         retryButton.setOnClickListener { lastSelectedFormat?.let { startDownload(it) } }
     }
@@ -147,7 +152,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val home = LayoutInflater.from(this).inflate(R.layout.screen_home, screenContainer, false)
         screenContainer.addView(home)
         home.findViewById<Button>(R.id.newDownloadButton).setOnClickListener { showDownloader() }
-        home.findViewById<Button>(R.id.exportCsvButton).setOnClickListener { exportCsv() }
+        home.findViewById<Button>(R.id.exportCsvButton).setOnClickListener { safeExportCsv() }
         renderHome(home)
     }
 
@@ -200,11 +205,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             item.findViewById<TextView>(R.id.downloadedMeta).text = listOfNotNull(
                 download.quality,
                 download.fileSizeText,
+                download.channel,
                 formatDate(download.downloadedAt)
             ).joinToString(" • ")
-            item.findViewById<TextView>(R.id.downloadedPath).text = download.filePathOrUri
-            item.findViewById<Button>(R.id.openDownloadedButton).setOnClickListener { openUri(download.filePathOrUri) }
-            item.findViewById<Button>(R.id.copyPathButton).setOnClickListener { copyToClipboard("Video path", download.filePathOrUri) }
+            item.findViewById<TextView>(R.id.downloadedPath).text = download.readablePath
+            item.findViewById<Button>(R.id.openDownloadedButton).setOnClickListener { openVideoUri(download.contentUri) }
+            item.findViewById<Button>(R.id.copyPathButton).setOnClickListener { copyToClipboard("Video path", download.readablePath, "Path copied") }
+            item.findViewById<Button>(R.id.csvButton).setOnClickListener { openCsvForDownload(download) }
             downloadsContainer.addView(item)
         }
 
@@ -241,6 +248,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         detailCard?.visibility = View.GONE
         formatSection?.visibility = View.GONE
         completedUri = null
+        completedReadablePath = null
         activeFormat = null
         lastSelectedFormat = null
         activeFormatAutoReprepared = false
@@ -344,6 +352,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private fun prepareAndStartDownload(format: DownloadFormat) {
         setFormatButtonsEnabled(false)
         completedUri = null
+        completedReadablePath = null
         downloadBottomSheet.visibility = View.VISIBLE
         setDownloadPanelExpanded(true)
         openFileButton.visibility = View.GONE
@@ -388,9 +397,10 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         openFileButton.visibility = View.GONE
         downloadPanelTitle.text = "Downloading..."
         downloadFileText.text = prepared.fileName
-        downloadStatusText.text = prepared.fileSizeText?.let { "File size: $it" } ?: "Saving to Movies/ZaVideoDownloader"
+        val channel = currentVideoInfo?.channel?.takeIf { it.isNotBlank() } ?: "UnknownChannel"
+        downloadStatusText.text = prepared.fileSizeText?.let { "File size: $it" } ?: "Saving to Movies/ZaVideoDownloader/$channel"
         downloadPanelPercent.text = "0%"
-        val request = runCatching { downloadManager.download(prepared) }
+        val request = runCatching { downloadManager.download(prepared, currentVideoInfo, lastSelectedFormat) }
             .getOrElse {
                 setFormatButtonsEnabled(true)
                 downloadPanelTitle.text = "Download failed"
@@ -416,29 +426,37 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val fileName = data.getString(DownloadWorker.KEY_FILE_NAME).orEmpty()
         val speed = data.getLong(DownloadWorker.KEY_SPEED, -1L)
         val error = info.outputData.getString(DownloadWorker.KEY_ERROR)
-        val outputUri = info.outputData.getString(DownloadWorker.KEY_OUTPUT_URI) ?: data.getString(DownloadWorker.KEY_OUTPUT_URI)
+        val outputUri = info.outputData.getString(DownloadWorker.KEY_CONTENT_URI)
+            ?: info.outputData.getString(DownloadWorker.KEY_OUTPUT_URI)
+            ?: data.getString(DownloadWorker.KEY_OUTPUT_URI)
+        val readablePath = info.outputData.getString(DownloadWorker.KEY_READABLE_PATH)
+            ?: data.getString(DownloadWorker.KEY_READABLE_PATH)
+            ?: outputUri
+        val relativePath = info.outputData.getString(DownloadWorker.KEY_RELATIVE_PATH)
+            ?: readablePath?.substringBeforeLast('/', missingDelimiterValue = "Movies/ZaVideoDownloader")
 
         downloadProgress.isIndeterminate = false
         downloadProgress.progress = progress
         downloadFileText.text = fileName.ifBlank { "Download" }
         downloadPanelTitle.text = if (info.state == WorkInfo.State.SUCCEEDED) "Download completed" else status
         downloadStatusText.text = if (speed > 0 && info.state == WorkInfo.State.RUNNING) {
-            "${TimeFormat.bytes(speed)}/s • Movies/ZaVideoDownloader"
+            "${TimeFormat.bytes(speed)}/s • ${relativePath ?: "Movies/ZaVideoDownloader"}"
         } else {
-            error ?: "Movies/ZaVideoDownloader"
+            error ?: (relativePath ?: "Movies/ZaVideoDownloader")
         }
         downloadPanelPercent.text = "$progress%"
 
         if (info.state == WorkInfo.State.SUCCEEDED && !outputUri.isNullOrBlank()) {
             val wasAlreadyCompleted = completedUri != null
             completedUri = Uri.parse(outputUri)
+            completedReadablePath = readablePath
             downloadFileText.text = fileName.ifBlank { "Download completed" }
             downloadPanelTitle.text = "Download completed"
-            downloadStatusText.text = "Saved to Movies/ZaVideoDownloader"
+            downloadStatusText.text = "Saved to ${relativePath ?: readablePath ?: "Movies/ZaVideoDownloader"}"
             retryButton.visibility = View.GONE
             openFileButton.visibility = View.VISIBLE
             setFormatButtonsEnabled(true)
-            if (!wasAlreadyCompleted) recordCompletedDownload(outputUri, fileName)
+            if (!wasAlreadyCompleted) recordCompletedDownload(outputUri, readablePath.orEmpty(), fileName)
         } else if (info.state == WorkInfo.State.FAILED) {
             val message = error ?: "Download failed"
             if (shouldAutoReprepare(message)) {
@@ -454,7 +472,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         }
     }
 
-    private fun recordCompletedDownload(outputUri: String, fileName: String) {
+    private fun recordCompletedDownload(contentUri: String, readablePath: String, fileName: String) {
         val videoInfo = currentVideoInfo
         val format = lastSelectedFormat
         val download = DownloadedVideo(
@@ -467,11 +485,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             tags = videoInfo?.tags,
             quality = format?.qualityBadge(),
             fileSizeText = format?.fileSizeText,
-            filePathOrUri = outputUri,
+            contentUri = contentUri,
+            readablePath = readablePath.ifBlank { contentUri },
             downloadedAt = System.currentTimeMillis()
         )
         historyStore.addDownload(download)
-        runCatching { csvExportManager.appendDownload(download) }
+        val savedDownloads = historyStore.getDownloads()
+        runCatching { csvExportManager.appendOrCreate(download, savedDownloads) }
+            .onFailure { Toast.makeText(this, "CSV otomatis gagal dibuat: ${it.message.orEmpty()}", Toast.LENGTH_LONG).show() }
         if (currentScreen == ScreenState.HOME) showHome()
     }
 
@@ -482,9 +503,38 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         downloadPanelToggle.contentDescription = if (expanded) "Collapse download panel" else "Expand download panel"
     }
 
-    private fun exportCsv() {
-        val file = csvExportManager.exportAll(historyStore.getDownloads())
-        Toast.makeText(this, "CSV exported: ${file.absolutePath}", Toast.LENGTH_LONG).show()
+    private fun safeExportCsv() {
+        runCatching { exportCsvFromHome() }
+            .onFailure { Toast.makeText(this, "Gagal export CSV: ${it.message.orEmpty()}", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun exportCsvFromHome() {
+        val downloads = historyStore.getDownloads()
+        if (downloads.isEmpty()) {
+            Toast.makeText(this, "Belum ada video yang didownload. Download video dulu untuk membuat CSV.", Toast.LENGTH_LONG).show()
+            return
+        }
+        ensureStorageThenExportCsv(downloads)
+    }
+
+    private fun ensureStorageThenExportCsv(downloads: List<DownloadedVideo>) {
+        if (!hasLegacyWritePermission()) {
+            pendingCsvExport = true
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_WRITE_STORAGE)
+            return
+        }
+        runCatching { exportCsv(downloads) }
+            .onFailure { Toast.makeText(this, "Gagal export CSV: ${it.message.orEmpty()}", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun exportCsv(downloads: List<DownloadedVideo>) {
+        val savedFiles = csvExportManager.exportAll(downloads)
+        if (savedFiles.isEmpty()) {
+            Toast.makeText(this, "Belum ada video yang didownload. Download video dulu untuk membuat CSV.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val names = savedFiles.joinToString(", ") { it.displayName }
+        Toast.makeText(this, "CSV exported to Movies/ZaVideoDownloader/csv: $names", Toast.LENGTH_LONG).show()
     }
 
     private fun setFormatButtonsEnabled(enabled: Boolean) {
@@ -530,23 +580,48 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private fun openCompletedFile() {
         val uri = completedUri ?: return
-        openUri(uri.toString())
+        openVideoUri(uri.toString())
     }
 
-    private fun openUri(value: String) {
+    private fun openVideoUri(value: String) {
+        openUri(value, "video/mp4", "Open video", "Unable to open this video")
+    }
+
+    private fun openCsvForDownload(download: DownloadedVideo) {
+        val saved = runCatching { csvExportManager.exportChannel(download.channel, historyStore.getDownloads()) }
+            .getOrElse {
+                Toast.makeText(this, "Unable to create CSV", Toast.LENGTH_SHORT).show()
+                return
+            }
+        openUri(saved.uri.toString(), "text/csv", "Open CSV", "Unable to open this CSV")
+    }
+
+    private fun openUri(value: String, mimeType: String, chooserTitle: String, errorMessage: String) {
         val uri = Uri.parse(value)
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "video/mp4")
+            setDataAndType(uri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        runCatching { startActivity(Intent.createChooser(intent, "Open video")) }
-            .onFailure { Toast.makeText(this, "Unable to open this video", Toast.LENGTH_SHORT).show() }
+        runCatching { startActivity(Intent.createChooser(intent, chooserTitle)) }
+            .onFailure { Toast.makeText(this, errorMessage, Toast.LENGTH_SHORT).show() }
     }
 
-    private fun copyToClipboard(label: String, value: String) {
+    private fun copyToClipboard(label: String, value: String, toastMessage: String = "Copied") {
         val clipboard = ContextCompat.getSystemService(this, ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, value))
-        Toast.makeText(this, "Copied", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, toastMessage, Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_WRITE_STORAGE && pendingCsvExport) {
+            pendingCsvExport = false
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                exportCsvFromHome()
+            } else {
+                Toast.makeText(this, "Storage permission dibutuhkan untuk export CSV.", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun hasLegacyWritePermission(): Boolean = Build.VERSION.SDK_INT > Build.VERSION_CODES.P ||
