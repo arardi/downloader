@@ -2,7 +2,8 @@ package eu.linkzhe.shortdownloader.model
 
 data class AnalyzedUrl(
     val url: String,
-    val title: String,
-    val videoId: String,
+    val title: String?,
+    val videoId: String?,
+    val channel: String?,
     val analyzedAt: Long
 )

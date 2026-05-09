@@ -29,10 +29,16 @@ class DownloadHistoryStore(context: Context) {
         ?.let { parseRecentUrls(it) }
         .orEmpty()
 
-    fun addRecentUrl(url: String, title: String, videoId: String, analyzedAt: Long = System.currentTimeMillis()) {
+    fun addRecentUrl(
+        url: String,
+        title: String?,
+        videoId: String?,
+        channel: String?,
+        analyzedAt: Long = System.currentTimeMillis()
+    ) {
         val cleanUrl = url.trim()
         if (cleanUrl.isBlank()) return
-        val item = AnalyzedUrl(cleanUrl, title, videoId, analyzedAt)
+        val item = AnalyzedUrl(cleanUrl, title, videoId, channel, analyzedAt)
         val items = buildList {
             add(item)
             addAll(getRecentUrls().filterNot { it.url.equals(cleanUrl, ignoreCase = true) })
@@ -62,6 +68,10 @@ class DownloadHistoryStore(context: Context) {
                         fileSizeText = json.optNullableString("fileSizeText"),
                         contentUri = json.optString("contentUri").ifBlank { json.optString("filePathOrUri") },
                         readablePath = json.optString("readablePath").ifBlank { json.optString("filePathOrUri") },
+                        publicPath = json.optString("publicPath")
+                            .ifBlank { json.optString("readablePath") }
+                            .ifBlank { json.optString("filePathOrUri") }
+                            .toPublicMoviesPath(),
                         downloadedAt = json.optLong("downloadedAt")
                     )
                 )
@@ -77,8 +87,9 @@ class DownloadHistoryStore(context: Context) {
                 add(
                     AnalyzedUrl(
                         url = json.optString("url"),
-                        title = json.optString("title"),
-                        videoId = json.optString("videoId"),
+                        title = json.optNullableString("title"),
+                        videoId = json.optNullableString("videoId"),
+                        channel = json.optNullableString("channel"),
                         analyzedAt = json.optLong("analyzedAt")
                     )
                 )
@@ -98,21 +109,25 @@ class DownloadHistoryStore(context: Context) {
         .put("fileSizeText", fileSizeText)
         .put("contentUri", contentUri)
         .put("readablePath", readablePath)
+        .put("publicPath", publicPath)
         .put("downloadedAt", downloadedAt)
 
     private fun AnalyzedUrl.toJson(): JSONObject = JSONObject()
         .put("url", url)
         .put("title", title)
         .put("videoId", videoId)
+        .put("channel", channel)
         .put("analyzedAt", analyzedAt)
 
     private fun JSONObject.optNullableString(name: String): String? = optString(name).trim().takeIf { it.isNotEmpty() && it != "null" }
+
+    private fun String.toPublicMoviesPath(): String = if (startsWith("/storage/")) this else "/storage/emulated/0/$this"
 
     companion object {
         private const val PREFS_NAME = "download_history"
         private const val KEY_DOWNLOADS = "downloads"
         private const val KEY_RECENT_URLS = "recent_urls"
         private const val MAX_DOWNLOADS = 50
-        private const val MAX_RECENT_URLS = 20
+        private const val MAX_RECENT_URLS = 50
     }
 }

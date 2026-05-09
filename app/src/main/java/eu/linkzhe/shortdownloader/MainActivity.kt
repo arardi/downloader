@@ -93,6 +93,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private var currentVideoInfo: VideoInfo? = null
     private var completedUri: Uri? = null
     private var completedReadablePath: String? = null
+    private var completedPublicPath: String? = null
     private var activeFormat: DownloadFormat? = null
     private var lastSelectedFormat: DownloadFormat? = null
     private var activeFormatAutoReprepared = false
@@ -100,6 +101,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private var pendingCsvExport = false
     private var pendingCsvAfterPermission = false
     private var hasCsvError = false
+    private val expandedDownloadChannels = mutableSetOf<String>()
+    private val expandedAnalyzedChannels = mutableSetOf<String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -206,42 +209,123 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val fixCsvPermissionButton = root.findViewById<Button>(R.id.fixCsvPermissionButton)
         downloadsContainer.removeAllViews()
         downloadsEmptyText.visibility = if (downloads.isEmpty()) View.VISIBLE else View.GONE
+        downloadsEmptyText.text = "No downloaded videos yet\nYour downloads will be grouped by channel here."
         fixCsvPermissionButton.visibility = if (hasCsvError) View.VISIBLE else View.GONE
-        downloads.forEach { download ->
-            val item = LayoutInflater.from(this).inflate(R.layout.item_downloaded_video, downloadsContainer, false)
-            item.findViewById<TextView>(R.id.downloadedTitle).text = download.title
-            item.findViewById<TextView>(R.id.downloadedMeta).text = listOfNotNull(
-                download.quality,
-                download.fileSizeText,
-                download.channel,
-                formatDate(download.downloadedAt)
-            ).joinToString(" • ")
-            item.findViewById<TextView>(R.id.downloadedPath).text = download.readablePath
-            item.findViewById<Button>(R.id.openDownloadedButton).setOnClickListener { openVideoUri(download.contentUri) }
-            item.findViewById<Button>(R.id.copyPathButton).setOnClickListener { copyToClipboard("Video path", download.readablePath, "Path copied") }
-            item.findViewById<Button>(R.id.csvButton).setOnClickListener { openCsvForDownload(download) }
-            downloadsContainer.addView(item)
-        }
+
+        downloads
+            .groupByChannel { it.channel }
+            .forEach { (channel, channelDownloads) ->
+                val sortedDownloads = channelDownloads.sortedByDescending { it.downloadedAt }
+                downloadsContainer.addView(
+                    createChannelGroupItem(
+                        parent = downloadsContainer,
+                        channel = channel,
+                        countText = "${sortedDownloads.size} video${if (sortedDownloads.size == 1) "" else "s"}",
+                        dateText = "Last download: ${formatDate(sortedDownloads.maxOf { it.downloadedAt })}",
+                        expanded = expandedDownloadChannels.contains(channel),
+                        onClick = {
+                            toggleExpanded(expandedDownloadChannels, channel)
+                            showHome()
+                        }
+                    )
+                )
+                if (expandedDownloadChannels.contains(channel)) {
+                    sortedDownloads.forEach { download ->
+                        downloadsContainer.addView(createDownloadedVideoItem(downloadsContainer, download))
+                    }
+                }
+            }
 
         val urls = historyStore.getRecentUrls()
         val urlsContainer = root.findViewById<LinearLayout>(R.id.recentUrlsContainer)
         val urlsEmptyText = root.findViewById<TextView>(R.id.recentUrlsEmptyText)
         urlsContainer.removeAllViews()
         urlsEmptyText.visibility = if (urls.isEmpty()) View.VISIBLE else View.GONE
-        urls.forEach { recentUrl ->
-            val item = LayoutInflater.from(this).inflate(R.layout.item_recent_url, urlsContainer, false)
-            bindRecentUrlItem(item, recentUrl)
-            urlsContainer.addView(item)
-        }
+        urlsEmptyText.text = "No analyzed URLs yet\nAnalyzed videos will be grouped by channel here."
+        urls
+            .groupByChannel { it.channel }
+            .forEach { (channel, channelUrls) ->
+                val sortedUrls = channelUrls.sortedByDescending { it.analyzedAt }
+                urlsContainer.addView(
+                    createChannelGroupItem(
+                        parent = urlsContainer,
+                        channel = channel,
+                        countText = "${sortedUrls.size} URL${if (sortedUrls.size == 1) "" else "s"}",
+                        dateText = "Last analyzed: ${formatDate(sortedUrls.maxOf { it.analyzedAt })}",
+                        expanded = expandedAnalyzedChannels.contains(channel),
+                        onClick = {
+                            toggleExpanded(expandedAnalyzedChannels, channel)
+                            showHome()
+                        }
+                    )
+                )
+                if (expandedAnalyzedChannels.contains(channel)) {
+                    sortedUrls.forEach { recentUrl ->
+                        val item = LayoutInflater.from(this).inflate(R.layout.item_recent_url, urlsContainer, false)
+                        bindRecentUrlItem(item, recentUrl)
+                        urlsContainer.addView(item)
+                    }
+                }
+            }
+    }
+
+    private fun createChannelGroupItem(
+        parent: LinearLayout,
+        channel: String,
+        countText: String,
+        dateText: String,
+        expanded: Boolean,
+        onClick: () -> Unit
+    ): View {
+        val item = LayoutInflater.from(this).inflate(R.layout.item_channel_group, parent, false)
+        item.findViewById<TextView>(R.id.channelGroupName).text = channel
+        item.findViewById<TextView>(R.id.channelGroupCount).text = countText
+        item.findViewById<TextView>(R.id.channelGroupDate).text = dateText
+        item.findViewById<ImageView>(R.id.channelGroupChevron)
+            .setImageResource(if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
+        item.setOnClickListener { onClick() }
+        return item
+    }
+
+    private fun createDownloadedVideoItem(parent: LinearLayout, download: DownloadedVideo): View {
+        val item = LayoutInflater.from(this).inflate(R.layout.item_downloaded_video, parent, false)
+        item.findViewById<TextView>(R.id.downloadedTitle).text = download.title
+        item.findViewById<TextView>(R.id.downloadedMeta).text = listOfNotNull(
+            download.quality,
+            download.fileSizeText,
+            formatDate(download.downloadedAt)
+        ).joinToString(" • ")
+        item.findViewById<TextView>(R.id.downloadedPath).text = download.safePublicPath()
+        item.findViewById<Button>(R.id.openDownloadedButton).setOnClickListener { openVideoUri(download.contentUri) }
+        item.findViewById<Button>(R.id.copyPathButton).setOnClickListener { copyPath(download) }
+        item.findViewById<Button>(R.id.csvButton).setOnClickListener { openCsvForDownload(download) }
+        return item
     }
 
     private fun bindRecentUrlItem(item: View, recentUrl: AnalyzedUrl) {
-        item.findViewById<TextView>(R.id.recentUrlTitle).text = recentUrl.title.ifBlank { recentUrl.videoId }
+        item.findViewById<TextView>(R.id.recentUrlTitle).text = recentUrl.title.orEmpty().ifBlank { recentUrl.videoId.orEmpty().ifBlank { "Analyzed video" } }
         item.findViewById<TextView>(R.id.recentUrlText).text = recentUrl.url
         item.findViewById<TextView>(R.id.recentUrlDate).text = formatDate(recentUrl.analyzedAt)
         val reAnalyze = { showDownloader(recentUrl.url, autoAnalyze = true) }
         item.setOnClickListener { reAnalyze() }
         item.findViewById<Button>(R.id.reAnalyzeButton).setOnClickListener { reAnalyze() }
+    }
+
+    private fun <T> List<T>.groupByChannel(channelSelector: (T) -> String?): List<Pair<String, List<T>>> =
+        groupBy { channelSelector(it).orEmpty().ifBlank { UNKNOWN_CHANNEL } }
+            .toList()
+            .sortedByDescending { (_, items) ->
+                items.maxOf { item ->
+                    when (item) {
+                        is DownloadedVideo -> item.downloadedAt
+                        is AnalyzedUrl -> item.analyzedAt
+                        else -> 0L
+                    }
+                }
+            }
+
+    private fun toggleExpanded(expandedChannels: MutableSet<String>, channel: String) {
+        if (!expandedChannels.add(channel)) expandedChannels.remove(channel)
     }
 
     private fun pasteFromClipboard() {
@@ -257,6 +341,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         formatSection?.visibility = View.GONE
         completedUri = null
         completedReadablePath = null
+        completedPublicPath = null
         activeFormat = null
         lastSelectedFormat = null
         activeFormatAutoReprepared = false
@@ -279,7 +364,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             val result = runCatching { extractor.fetchInfo(input) }
             loadingContainer?.visibility = View.GONE
             result.onSuccess {
-                historyStore.addRecentUrl(input, it.title, it.videoId)
+                historyStore.addRecentUrl(
+                    url = it.originalUrl,
+                    title = it.title,
+                    videoId = it.videoId,
+                    channel = it.channel,
+                    analyzedAt = System.currentTimeMillis()
+                )
                 renderVideoInfo(it)
             }.onFailure { showError("Unable to analyze this video. ${it.message.orEmpty()}".trim()) }
         }
@@ -361,6 +452,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         setFormatButtonsEnabled(false)
         completedUri = null
         completedReadablePath = null
+        completedPublicPath = null
         downloadBottomSheet.visibility = View.VISIBLE
         setDownloadPanelExpanded(true)
         openFileButton.visibility = View.GONE
@@ -440,6 +532,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val readablePath = info.outputData.getString(DownloadWorker.KEY_READABLE_PATH)
             ?: data.getString(DownloadWorker.KEY_READABLE_PATH)
             ?: outputUri
+        val publicPath = info.outputData.getString(DownloadWorker.KEY_PUBLIC_PATH)
+            ?: data.getString(DownloadWorker.KEY_PUBLIC_PATH)
+            ?: readablePath?.toPublicMoviesPath()
         val relativePath = info.outputData.getString(DownloadWorker.KEY_RELATIVE_PATH)
             ?: readablePath?.substringBeforeLast('/', missingDelimiterValue = "Movies/ZaVideoDownloader")
 
@@ -458,13 +553,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             val wasAlreadyCompleted = completedUri != null
             completedUri = Uri.parse(outputUri)
             completedReadablePath = readablePath
+            completedPublicPath = publicPath
             downloadFileText.text = fileName.ifBlank { "Download completed" }
             downloadPanelTitle.text = "Download completed"
-            downloadStatusText.text = "Saved to ${relativePath ?: readablePath ?: "Movies/ZaVideoDownloader"}"
+            downloadStatusText.text = "Saved to ${publicPath ?: relativePath ?: readablePath ?: "Movies/ZaVideoDownloader"}"
             retryButton.visibility = View.GONE
             openFileButton.visibility = View.VISIBLE
             setFormatButtonsEnabled(true)
-            if (!wasAlreadyCompleted) recordCompletedDownload(outputUri, readablePath.orEmpty(), fileName)
+            if (!wasAlreadyCompleted) recordCompletedDownload(outputUri, readablePath.orEmpty(), publicPath.orEmpty(), fileName)
         } else if (info.state == WorkInfo.State.FAILED) {
             val message = error ?: "Download failed"
             if (shouldAutoReprepare(message)) {
@@ -480,7 +576,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         }
     }
 
-    private fun recordCompletedDownload(contentUri: String, readablePath: String, fileName: String) {
+    private fun recordCompletedDownload(contentUri: String, readablePath: String, publicPath: String, fileName: String) {
         val videoInfo = currentVideoInfo
         val format = lastSelectedFormat
         val download = DownloadedVideo(
@@ -495,6 +591,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             fileSizeText = format?.fileSizeText,
             contentUri = contentUri,
             readablePath = readablePath.ifBlank { contentUri },
+            publicPath = publicPath.ifBlank { readablePath.toPublicMoviesPath() },
             downloadedAt = System.currentTimeMillis()
         )
         historyStore.addDownload(download)
@@ -552,7 +649,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 hasCsvError = false
                 Toast.makeText(
                     this,
-                    "CSV saved to Movies/ZaVideoDownloader/csv",
+                    "CSV saved to ${exported.first().publicPath}",
                     Toast.LENGTH_LONG
                 ).show()
                 if (currentScreen == ScreenState.HOME) showHome()
@@ -675,6 +772,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             .onFailure { Toast.makeText(this, errorMessage, Toast.LENGTH_SHORT).show() }
     }
 
+    private fun copyPath(download: DownloadedVideo) {
+        copyToClipboard("Video path", download.safePublicPath(), "Path copied")
+    }
+
+    private fun DownloadedVideo.safePublicPath(): String = publicPath.ifBlank { readablePath.toPublicMoviesPath() }
+
+    private fun String.toPublicMoviesPath(): String = if (startsWith("/storage/")) this else "/storage/emulated/0/$this"
+
     private fun copyToClipboard(label: String, value: String, toastMessage: String = "Copied") {
         val clipboard = ContextCompat.getSystemService(this, ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText(label, value))
@@ -767,6 +872,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     companion object {
         private const val REQUEST_WRITE_STORAGE = 28
         private const val EXIT_BACK_WINDOW_MS = 2_000L
+        private const val UNKNOWN_CHANNEL = "Unknown Channel"
         private val DATE_FORMAT = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.US)
     }
 }

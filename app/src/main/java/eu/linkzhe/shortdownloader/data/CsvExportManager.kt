@@ -84,7 +84,7 @@ class CsvExportManager(private val context: Context) {
                 null,
                 null
             )
-            return SavedCsv(uri, displayName, "$relativePath/$displayName", relativePath)
+            return SavedCsv(uri, displayName, "$relativePath/$displayName", relativePath, publicCsvPath(relativePath, displayName))
         } catch (throwable: Throwable) {
             throw throwable
         }
@@ -120,7 +120,7 @@ class CsvExportManager(private val context: Context) {
         val file = File(directory, displayName)
         file.writeBytes(bytes)
         MediaScannerConnection.scanFile(context, arrayOf(file.absolutePath), arrayOf(MIME_TYPE), null)
-        return SavedCsv(Uri.fromFile(file), displayName, "$relativePath/$displayName", relativePath)
+        return SavedCsv(Uri.fromFile(file), displayName, file.absolutePath, relativePath, file.absolutePath)
     }
 
     private fun buildCsv(downloads: List<DownloadedVideo>): String = buildString {
@@ -137,7 +137,7 @@ class CsvExportManager(private val context: Context) {
         title,
         tags,
         description,
-        readablePath,
+        publicPath.ifBlank { readablePath.toPublicMoviesPath() },
         contentUri,
         originalUrl,
         videoId,
@@ -151,6 +151,11 @@ class CsvExportManager(private val context: Context) {
         val safe = value.orEmpty()
         return "\"" + safe.replace("\"", "\"\"") + "\""
     }
+
+    private fun publicCsvPath(relativePath: String, displayName: String): String =
+        "/storage/emulated/0/$relativePath/$displayName"
+
+    private fun String.toPublicMoviesPath(): String = if (startsWith("/storage/")) this else "/storage/emulated/0/$this"
 
     companion object {
         private const val MIME_TYPE = "text/csv"

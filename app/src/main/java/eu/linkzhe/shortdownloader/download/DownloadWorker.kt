@@ -148,6 +148,7 @@ class DownloadWorker(
         .putString(KEY_OUTPUT_URI, saved.uri.toString())
         .putString(KEY_CONTENT_URI, saved.uri.toString())
         .putString(KEY_READABLE_PATH, saved.readablePath)
+        .putString(KEY_PUBLIC_PATH, saved.publicPath)
         .putString(KEY_RELATIVE_PATH, saved.relativePath)
         .build()
 
@@ -181,6 +182,7 @@ class DownloadWorker(
         const val KEY_OUTPUT_URI = "output_uri"
         const val KEY_CONTENT_URI = "content_uri"
         const val KEY_READABLE_PATH = "readable_path"
+        const val KEY_PUBLIC_PATH = "public_path"
         const val KEY_RELATIVE_PATH = "relative_path"
         const val KEY_ERROR = "error"
         private const val REFERER = "https://app.ytdown.to/en27/"
