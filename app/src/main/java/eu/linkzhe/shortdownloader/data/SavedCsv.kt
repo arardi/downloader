@@ -6,5 +6,6 @@ data class SavedCsv(
     val uri: Uri,
     val displayName: String,
     val readablePath: String,
-    val relativePath: String
+    val relativePath: String,
+    val publicPath: String
 )

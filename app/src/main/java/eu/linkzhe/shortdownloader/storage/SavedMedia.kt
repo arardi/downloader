@@ -6,5 +6,6 @@ data class SavedMedia(
     val uri: Uri,
     val displayName: String,
     val relativePath: String,
-    val readablePath: String
+    val readablePath: String,
+    val publicPath: String
 )

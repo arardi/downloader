@@ -18,7 +18,8 @@ class MediaStoreSaver(private val context: Context) {
         val legacyPath: String?,
         val displayName: String,
         val relativePath: String,
-        val readablePath: String
+        val readablePath: String,
+        val publicPath: String
     )
 
     fun createVideo(displayName: String, mimeType: String = "video/mp4", channelName: String?): PendingVideo {
@@ -47,13 +48,24 @@ class MediaStoreSaver(private val context: Context) {
         val uri = resolver.insert(collection, values) ?: error("Cannot create MediaStore entry.")
         val stream = resolver.openOutputStream(uri) ?: error("Cannot open MediaStore output stream.")
         val legacyPath = values.getAsString(MediaStore.Video.Media.DATA)
+        val readablePath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "$relativePath/$displayName"
+        } else {
+            legacyPath ?: "$relativePath/$displayName"
+        }
+        val publicPath = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "/storage/emulated/0/$relativePath/$displayName"
+        } else {
+            legacyPath ?: readablePath.toPublicMoviesPath()
+        }
         return PendingVideo(
             uri = uri,
             stream = stream,
             legacyPath = legacyPath,
             displayName = displayName,
             relativePath = relativePath,
-            readablePath = "$relativePath/$displayName"
+            readablePath = readablePath,
+            publicPath = publicPath
         )
     }
 
@@ -75,7 +87,8 @@ class MediaStoreSaver(private val context: Context) {
                 uri = pending.uri,
                 displayName = pending.displayName,
                 relativePath = pending.relativePath,
-                readablePath = pending.readablePath
+                readablePath = pending.readablePath,
+                publicPath = pending.publicPath
             )
         } catch (throwable: Throwable) {
             delete(pending.uri)
@@ -96,3 +109,5 @@ class MediaStoreSaver(private val context: Context) {
         context.contentResolver.delete(uri, null, null)
     }
 }
+
+private fun String.toPublicMoviesPath(): String = if (startsWith("/storage/")) this else "/storage/emulated/0/$this"
